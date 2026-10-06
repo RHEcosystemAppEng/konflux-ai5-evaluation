@@ -4,6 +4,23 @@
 
 *Nothing yet.*
 
+## 0.2.0
+
+### Added
+
+- Per-submission AEH mode override: the `validate` step now reads
+  `metadata.yaml`'s own `aeh_mode` / `aeh_control_config` /
+  `aeh_treatment_config` fields (when present) and uses them in place of
+  this Task's pipeline-wide `aeh-mode` / `aeh-control-config` /
+  `aeh-treatment-config` params for that one Matrix leg, baking the
+  resolved values to `.baked-vars/` for `run-eval` to read. Lets one
+  submission opt into `AEH_MODE=pairwise` (vanilla-vs-skilled control/
+  treatment lift comparison) without the calling pipeline's own
+  `AEH_MODE` param -- shared by every skill's Matrix leg -- having to
+  flip for the whole catalog. No change in behavior for a submission that
+  omits these `metadata.yaml` fields: it still inherits the pipeline
+  param exactly as before.
+
 ## 0.1.0
 
 ### Added

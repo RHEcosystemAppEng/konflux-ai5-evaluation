@@ -70,7 +70,7 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/version: "0.2.0"
 spec:
   description: >-
     Runs a single skill's full evaluation as one Task, so Matrix can fan
@@ -484,10 +484,38 @@ spec:
         SUBMISSION_PATH="${LEG_DIR}/submissions/${SUBMISSION_DIR}"
         cd "$PIPELINE_DIR"
         export PYTHONPATH="$PIPELINE_DIR"
+
+        # Per-skill AEH mode: metadata.yaml's own `aeh_mode` (if set) wins
+        # over this pipeline-wide AEH_MODE/AEH_CONTROL_CONFIG/
+        # AEH_TREATMENT_CONFIG default -- lets one submission (e.g. a
+        # pairwise control/treatment pair) opt into AEH_MODE=pairwise
+        # without flipping every other skill's Matrix leg on every push
+        # (.tekton/*.yaml's own AEH_MODE param stays "single" catalog-wide).
+        # Falls back to the pipeline param whenever metadata.yaml omits the
+        # field. Baked to .baked-vars/ so the run-eval step (which runs as
+        # a separate container, no shared bash state) resolves the SAME
+        # effective values without re-reading metadata.yaml itself.
+        EFFECTIVE_AEH_MODE=$(python3 -c "
+        import yaml
+        meta = yaml.safe_load(open('$SUBMISSION_PATH/metadata.yaml')) or {}
+        print(meta.get('aeh_mode') or '$AEH_MODE', end='')
+        ")
+        EFFECTIVE_AEH_CONTROL_CONFIG=$(python3 -c "
+        import yaml
+        meta = yaml.safe_load(open('$SUBMISSION_PATH/metadata.yaml')) or {}
+        print(meta.get('aeh_control_config') or '$AEH_CONTROL_CONFIG', end='')
+        ")
+        EFFECTIVE_AEH_TREATMENT_CONFIG=$(python3 -c "
+        import yaml
+        meta = yaml.safe_load(open('$SUBMISSION_PATH/metadata.yaml')) or {}
+        print(meta.get('aeh_treatment_config') or '$AEH_TREATMENT_CONFIG', end='')
+        ")
+        echo "Effective AEH mode for $SUBMISSION_DIR: $EFFECTIVE_AEH_MODE (pipeline default: $AEH_MODE)"
+
         python scripts/validate.py "$SUBMISSION_PATH" --eval-engine aeh \
-          --aeh-mode "$AEH_MODE" \
-          --aeh-control-config "$AEH_CONTROL_CONFIG" \
-          --aeh-treatment-config "$AEH_TREATMENT_CONFIG" \
+          --aeh-mode "$EFFECTIVE_AEH_MODE" \
+          --aeh-control-config "$EFFECTIVE_AEH_CONTROL_CONFIG" \
+          --aeh-treatment-config "$EFFECTIVE_AEH_TREATMENT_CONFIG" \
           | tee /tmp/validation-output.json
         REPORTS_DIR="${LEG_DIR}/reports/${SUBMISSION_DIR}"
         mkdir -p "$REPORTS_DIR"
@@ -497,6 +525,9 @@ spec:
           echo "Validation FAILED"
           exit 1
         fi
+        echo -n "$EFFECTIVE_AEH_MODE" > "$VARS_DIR/aeh-mode"
+        echo -n "$EFFECTIVE_AEH_CONTROL_CONFIG" > "$VARS_DIR/aeh-control-config"
+        echo -n "$EFFECTIVE_AEH_TREATMENT_CONFIG" > "$VARS_DIR/aeh-treatment-config"
         python3 -c "
         import yaml, sys
         meta = yaml.safe_load(open(sys.argv[1]))
@@ -904,7 +935,12 @@ spec:
         cd "$PIPELINE_DIR"
         export PYTHONPATH="$PIPELINE_DIR"
 
-        AEH_MODE="$AEH_MODE_PARAM"
+        # Prefer the validate step's per-leg EFFECTIVE_AEH_MODE (baked from
+        # this submission's own metadata.yaml `aeh_mode`, falling back to
+        # the pipeline param) over the raw pipeline param directly -- see
+        # that step's own comment. The baked file always exists here: this
+        # step is gated on validate's own exit code above.
+        AEH_MODE=$(cat "$VARS_DIR/aeh-mode" 2>/dev/null || echo "$AEH_MODE_PARAM")
         AEH_RUNNER="$AEH_RUNNER_PARAM"
         AEH_IMAGE="$AEH_IMAGE_PARAM"
         echo "Mode: $AEH_MODE | Runner: $AEH_RUNNER"
@@ -934,8 +970,9 @@ spec:
         echo "KUBECONFIG: ${KUBECONFIG:-in-cluster}"
 
         EVAL_CONFIG="eval.yaml"
-        CONTROL_CONFIG="$AEH_CONTROL_CONFIG_PARAM"
-        TREATMENT_CONFIG="$AEH_TREATMENT_CONFIG_PARAM"
+        # Same per-leg-effective-value preference as AEH_MODE above.
+        CONTROL_CONFIG=$(cat "$VARS_DIR/aeh-control-config" 2>/dev/null || echo "$AEH_CONTROL_CONFIG_PARAM")
+        TREATMENT_CONFIG=$(cat "$VARS_DIR/aeh-treatment-config" 2>/dev/null || echo "$AEH_TREATMENT_CONFIG_PARAM")
 
         MODEL="$AEH_MODEL_OVERRIDE_PARAM"
         if [ -z "$MODEL" ]; then
