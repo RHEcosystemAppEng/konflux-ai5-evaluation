@@ -157,7 +157,7 @@ spec:
       default: "single"
     - name: aeh-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1"
     - name: aeh-model-override
       type: string
       default: ""
@@ -254,7 +254,7 @@ spec:
     # re-fetching content that's already sitting in an OCI artifact. Also
     # creates `.baked-vars/` up front so every later step can rely on it.
     - name: clone-repo
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -287,7 +287,7 @@ spec:
     # update-registered-shas.yaml for the same pattern). Not gated on
     # clone-repo's success -- this only writes a flag file.
     - name: compute-flags
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       onError: continue
       command: ["bash", "-c"]
       args:
@@ -336,7 +336,7 @@ spec:
     # that module's docstring for the full mechanism. Unmocked server
     # names in mcps.json are left untouched (real server, unaffected).
     - name: swap-mock-mcp
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       onError: continue
       env:
         - name: MOCK_MCP_BINARY
@@ -447,7 +447,7 @@ spec:
     # itself (in addition to the cascading prior-step-failure check) and
     # exits 0 immediately when not opted in this run.
     - name: validate
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -560,7 +560,7 @@ spec:
     # mechanically derived from submission-dir), LLM always off, always
     # --fail-on-severity high. Only gated on clone-repo's success.
     - name: security-scan
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -614,7 +614,7 @@ spec:
     # clone-repo's success. skillmd-quality-scan.json is leg-root (not
     # REPORT_KEY-scoped); the security findings file is.
     - name: skillmd-scan
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -668,7 +668,7 @@ spec:
     # skillmd-scan. Always exits 0 itself -- the pipeline-level aggregator
     # task applies the actual hard gate.
     - name: emit-tier-a
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       env:
         - name: SUBMISSION_DIR
           value: $(params.submission-dir)
@@ -728,7 +728,7 @@ spec:
 
     # Tier B chain, step 2: LLM-based quality review.
     - name: quality-review
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       env:
         - name: LLM_API_KEY
           value: "$(params.llm-api-key)"
@@ -791,7 +791,7 @@ spec:
     # (enable-aeh-eval-check); always best-effort, excluded from
     # emit-tier-b's failure enumeration.
     - name: aeh-eval-check
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -834,7 +834,7 @@ spec:
     # Tier B chain, observability step. Purely best-effort; excluded from
     # emit-tier-b's failure enumeration.
     - name: write-metrics-checkpoint
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -872,7 +872,7 @@ spec:
 
     # Tier B chain, core evaluation step: runs the AEH evaluation itself.
     - name: run-eval
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       volumeMounts:
         - name: aeh-kubeconfig
           mountPath: /tmp/aeh-kubeconfig
@@ -1099,7 +1099,7 @@ spec:
     # REPORT_KEY fallback as security-scan/skillmd-scan, so this finds
     # whatever those two wrote whether or not validate/run-eval ran.
     - name: analyze-and-scorecard
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       env:
         - name: COMPASS_API_TOKEN
           valueFrom:
@@ -1214,7 +1214,7 @@ spec:
     # case where this leg has a scorecard.json but no report.json by
     # persisting the gate/scorecard rows standalone.
     - name: store
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       env:
         - name: DATABASE_URL
           valueFrom:
@@ -1382,7 +1382,7 @@ spec:
     # report/scorecard-derived SUCCESS/WARNING/FAILURE verdict. Always
     # exits 0 itself.
     - name: emit-tier-b
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1
       env:
         - name: SUBMISSION_DIR
           value: $(params.submission-dir)

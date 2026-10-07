@@ -20,6 +20,8 @@
   flip for the whole catalog. No change in behavior for a submission that
   omits these `metadata.yaml` fields: it still inherits the pipeline
   param exactly as before.
+- Bumped every step's pinned `quay.io/ecosystem-appeng/agent-eval-harness`
+  image from `v1.2.0` to `v1.2.1` (rebuilt from `agentic_eval_flow`).
 
 ## 0.1.0
 
