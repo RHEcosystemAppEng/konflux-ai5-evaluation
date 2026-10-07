@@ -66,7 +66,7 @@ explicit values to point at your own repository instead.
     resolver: bundles
     params:
     - {name: name, value: aeh-skill-eval}
-    - {name: bundle, value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.1.0@sha256:0415374785a418acca32bb45471a80709086f585d040186f2b0be87b5ff5d89c"}
+    - {name: bundle, value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.2.0@sha256:67dd9be7e223322b1101810fdcbc4020f469ffaf95ec4323507f3de76718d90b"}
     - {name: kind, value: task}
   params:
   - {name: submission-revision, value: "$(params.revision)"}

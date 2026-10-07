@@ -52,7 +52,7 @@ Tasks).
 | llm-api-base | Base URL of the LLM API. | `""` | false |
 | llm-model | LLM model name for `quality-review`. | `"gemini-2.5-flash"` | false |
 | aeh-mode | AEH evaluation mode: `single` or `pairwise`. | `"single"` | false |
-| aeh-image | Container image AEH uses for the evaluation workload. | `"quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0"` | false |
+| aeh-image | Container image AEH uses for the evaluation workload. | `"quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1"` | false |
 | aeh-model-override | Explicit model override for `run-eval` (auto-derived from the item's own eval config when empty). | `""` | false |
 | aeh-judge-model-override | Explicit judge-model override for `run-eval`. | `""` | false |
 | aeh-runner | AEH runner backend (e.g. `harbor`). | `"harbor"` | false |
@@ -106,7 +106,7 @@ No ConfigMaps are used by this Task.
     - name: name
       value: aeh-skill-eval
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.1.0@sha256:0415374785a418acca32bb45471a80709086f585d040186f2b0be87b5ff5d89c"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.2.0@sha256:67dd9be7e223322b1101810fdcbc4020f469ffaf95ec4323507f3de76718d90b"
     - name: kind
       value: task
   params:
