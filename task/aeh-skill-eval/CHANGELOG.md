@@ -4,6 +4,30 @@
 
 *Nothing yet.*
 
+## 0.3.0
+
+### Fixed
+
+- Bumped every step's pinned `quay.io/ecosystem-appeng/agent-eval-harness`
+  image from `v1.2.1` to `v1.2.2` (rebuilt from `agentic_eval_flow`), which
+  fixes `scripts/run_aeh.py`'s `HarborRunner._execute()` passing
+  `--regenerate` to `python -m agent_eval.harbor.run` right after it had
+  just generated+enriched the same `tasks_dir` itself. `--regenerate`
+  unconditionally purges and re-generates Harbor task packages via bare
+  upstream `generate_tasks()`, which has no knowledge of AEH's own
+  enrichment (mock-MCP `schema.json`/`fixture.json` staging, `skills/`,
+  `annotations.yaml`, reward injection) -- silently wiping every one of
+  those files before Harbor ever uploaded the task to a trial pod. Any
+  skill depending on a mocked (or real) stdio MCP server therefore failed
+  to connect 100% of the time, with no infra-error signal (the agent still
+  completed its turn and wrote a degraded "connection failed" report), one
+  level of indirection away from quietly zeroing out judges like
+  `used_mcp_tool` in a pairwise AEH comparison. Confirmed root cause via a
+  live trial pod's own `/workspace/.cache/claude-cli-nodejs/-workspace/
+  mcp-logs-<server>/*.jsonl` connection log (`FileNotFoundError: ... mcp-
+  servers/<server>/schema.json`), and confirmed the fix end-to-end against
+  a real OpenShift trial pod.
+
 ## 0.2.0
 
 ### Added
