@@ -157,7 +157,7 @@ spec:
       default: "single"
     - name: aeh-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7"
     - name: aeh-model-override
       type: string
       default: ""
@@ -254,7 +254,7 @@ spec:
     # re-fetching content that's already sitting in an OCI artifact. Also
     # creates `.baked-vars/` up front so every later step can rely on it.
     - name: clone-repo
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -280,6 +280,117 @@ spec:
         echo "Copied trusted source artifact into ${LEG_DIR} (revision $SUBMISSION_REVISION)"
         mkdir -p "${LEG_DIR}/.baked-vars"
 
+        # Repair any git-tracked symlink that the trusted-artifact round
+        # trip (clone -> tar/OCI blob -> tar extract) flattened into a
+        # plain file containing only its own target path -- the classic
+        # symptom of a `core.symlinks=false` git client somewhere in that
+        # chain writing symlinks out as literal text instead of real OS
+        # symlinks. Several skill packs in this catalog deliberately
+        # symlink shared reference docs into sibling skills (e.g.
+        # rh-sre/skills/cve-validation/references/skill-invocation.md ->
+        # ../../remediation/references/skill-invocation.md); if that
+        # symlink survives as a one-line stub instead of real content,
+        # every downstream scan step sees a broken/missing reference
+        # instead of the actual doc, even though the real file is sitting
+        # right there in this same checkout. Purely defensive: only
+        # rewrites a file whose entire content is a single relative path
+        # that resolves to a real file inside this same leg checkout --
+        # never follows a path outside LEG_DIR, and is a no-op when
+        # symlinks survived intact (os.path.islink is already true) or a
+        # file's content is genuine prose.
+        python3 - "$LEG_DIR" <<'PYEOF'
+        import os
+        import sys
+
+        leg_dir = os.path.realpath(sys.argv[1])
+        repaired = 0
+        for root, _dirs, files in os.walk(leg_dir):
+            if "/.git" in root or root.endswith("/.git"):
+                continue
+            for name in files:
+                path = os.path.join(root, name)
+                if os.path.islink(path):
+                    continue
+                try:
+                    size = os.path.getsize(path)
+                    if size == 0 or size > 300:
+                        continue
+                    with open(path, encoding="utf-8") as f:
+                        content = f.read()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                stripped = content.strip()
+                # A flattened symlink stub is exactly one line, has no
+                # spaces, and looks like a relative path -- not prose, not
+                # a markdown heading, not YAML frontmatter.
+                if (
+                    not stripped
+                    or "\n" in stripped
+                    or " " in stripped
+                    or "/" not in stripped
+                    or stripped.startswith(("#", "-", "*"))
+                ):
+                    continue
+                target = os.path.realpath(os.path.join(root, stripped))
+                if not target.startswith(leg_dir + os.sep) or target == path:
+                    continue  # never follow a path outside this leg's checkout
+                if not os.path.isfile(target):
+                    continue
+                with open(target, "rb") as src, open(path, "wb") as dst:
+                    dst.write(src.read())
+                repaired += 1
+                print(f"Repaired flattened symlink stub: {os.path.relpath(path, leg_dir)} -> {os.path.relpath(target, leg_dir)}")
+
+        if repaired:
+            print(f"Repaired {repaired} flattened symlink stub(s) under {leg_dir}")
+        PYEOF
+
+    # Replaces every symlink still standing after clone-repo (genuine OS
+    # symlinks -- NOT the flattened-stub text files repaired above, which
+    # aren't symlinks any more by the time this runs) with a real copy of
+    # whatever it points to. Several skill packs deliberately symlink
+    # shared reference docs into sibling skills/packs, but run-eval and
+    # Harbor only ever stage the ONE skill/plugin_dirs tree being evaluated
+    # into a trial pod -- a symlink pointing outside that tree resolves
+    # fine on THIS disk but uploads as a dangling link once the pod only
+    # gets that single directory. Runs once, early, so every later step
+    # (security-scan, skillmd-scan, swap-mock-mcp, validate, run-eval) and
+    # the trial pod itself only ever see real files/dirs. onError:
+    # continue, like every other non-load-bearing step -- a broken link
+    # left in place degrades gracefully (same behavior as before this
+    # step existed) instead of failing the whole leg.
+    - name: resolve-symlinks
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      onError: continue
+      env:
+        - name: SUBMISSION_DIR
+          value: $(params.submission-dir)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
+          echo "Skipping: clone-repo failed earlier"
+          exit 0
+        fi
+        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
+        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
+
+        echo "=== PREPARE: Resolve symlinks to real content under ${LEG_DIR} ==="
+        find "$LEG_DIR" -path "*/.git" -prune -o -type l -print0 | \
+        while IFS= read -r -d '' link; do
+          target=$(readlink -f "$link")
+
+          if [ ! -e "$target" ]; then
+            echo "Skipped (broken link): $link"
+            continue
+          fi
+
+          echo "Resolving: $link -> $target"
+          rm "$link"
+          cp -a "$target" "$link"
+        done
+        echo "Symlink resolution complete."
+
     # Computes this leg's own `is-changed` flag: "true" iff submission-dir
     # is a member of the changed-skills array (identical for every leg).
     # Writes it to .baked-vars/is-changed for later gated steps to read.
@@ -287,7 +398,7 @@ spec:
     # update-registered-shas.yaml for the same pattern). Not gated on
     # clone-repo's success -- this only writes a flag file.
     - name: compute-flags
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       onError: continue
       command: ["bash", "-c"]
       args:
@@ -335,8 +446,20 @@ spec:
     # those exact paths inside that case's own trial-pod workspace -- see
     # that module's docstring for the full mechanism. Unmocked server
     # names in mcps.json are left untouched (real server, unaffected).
+    #
+    # ALSO generates+swaps any pairwise control arm's "<pack>-mcp-only"
+    # plugin_dirs sibling (a skill-less pack with no SKILL.md anywhere --
+    # the ONLY thing that stops agent_eval/harbor/run.py's
+    # _resolve_harbor_skill_roots from forwarding --skill for a plugin_dirs
+    # entry, confirmed empirically; there's no flag-based override). Logic
+    # extracted to scripts/swap_mock_mcp.py (baked into this image the same
+    # way as scripts/validate.py below) so it has real test coverage
+    # (agentic_eval_flow/tests/test_swap_mock_mcp.py) instead of living only
+    # as an untested inline heredoc -- and so run_aeh.py's own
+    # _prepare_enriched_tasks calls the SAME function for local dev runs,
+    # with no separate "remember to run this Tekton step" footgun.
     - name: swap-mock-mcp
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       onError: continue
       env:
         - name: MOCK_MCP_BINARY
@@ -362,84 +485,12 @@ spec:
         fi
         echo "=== PREPARE: Swap mock MCP servers into pack mcps.json ==="
         SUBMISSION_PATH="${LEG_DIR}/submissions/${SUBMISSION_DIR}"
-        SUBMISSION_PATH="$SUBMISSION_PATH" python3 <<'PYEOF'
-        import json
-        import os
-        from pathlib import Path
-
-        import yaml
-
-        submission_path = Path(os.environ["SUBMISSION_PATH"])
-        mock_binary = os.environ["MOCK_MCP_BINARY"]
-
-        eval_yaml = submission_path / "eval.yaml"
-        if not eval_yaml.is_file():
-            print(f"No eval.yaml at {eval_yaml} -- nothing to swap")
-            raise SystemExit(0)
-
-        cfg = yaml.safe_load(eval_yaml.read_text()) or {}
-        plugin_dirs = ((cfg.get("runner") or {}).get("plugin_dirs")) or []
-        if not plugin_dirs:
-            print("eval.yaml has no runner.plugin_dirs -- nothing to swap")
-            raise SystemExit(0)
-
-        # Union of cases/*/mock-mcps/<server>/ names across every case this
-        # skill submits -- mirrors
-        # abevalflow.harbor_extensions.aeh_task_enrichment._mock_mcp_server_names,
-        # which must agree with this step on which server names get mocked.
-        dataset_rel = ((cfg.get("dataset") or {}).get("path") or "cases").strip() or "cases"
-        cases_root = submission_path / dataset_rel
-        mock_server_names: set[str] = set()
-        if cases_root.is_dir():
-            for case_dir in cases_root.iterdir():
-                mock_mcps_dir = case_dir / "mock-mcps"
-                if not mock_mcps_dir.is_dir():
-                    continue
-                for server_dir in mock_mcps_dir.iterdir():
-                    if server_dir.is_dir() and (server_dir / "fixture.json").is_file():
-                        mock_server_names.add(server_dir.name)
-
-        if not mock_server_names:
-            print(f"No {cases_root}/*/mock-mcps/*/fixture.json found -- nothing to swap")
-            raise SystemExit(0)
-
-        # plugin_dirs entries are relative to the submission dir (e.g.
-        # "../../../rh-sre" -> the pack root containing mcps.json).
-        pack_root = (submission_path / plugin_dirs[0]).resolve()
-        mcps_path = pack_root / "mcps.json"
-        if not mcps_path.is_file():
-            print(f"No mcps.json at {mcps_path} -- nothing to swap")
-            raise SystemExit(0)
-
-        data = json.loads(mcps_path.read_text())
-        servers = data.get("mcpServers") or {}
-
-        swapped = []
-        for name in sorted(mock_server_names):
-            if name not in servers:
-                continue
-            servers[name] = {
-                "command": "python3",
-                "args": [
-                    mock_binary,
-                    "--schema", f"/workspace/mcp-servers/{name}/schema.json",
-                    "--fixtures", f"/workspace/mock-mcps/{name}/fixture.json",
-                    "--strategy", "fixtures",
-                    "--transport", "stdio",
-                ],
-            }
-            swapped.append(name)
-
-        if not swapped:
-            print(f"No matching server names in {mcps_path} for {sorted(mock_server_names)} -- nothing to swap")
-            raise SystemExit(0)
-
-        # Keep the original around for debugging -- this whole checkout is
-        # a throwaway leg workspace, never committed back.
-        (pack_root / "mcps.real.json").write_text(mcps_path.read_text())
-        mcps_path.write_text(json.dumps(data, indent=2))
-        print(f"Swapped {swapped} in {mcps_path} -> stdio mock MCP server(s)")
-        PYEOF
+        PIPELINE_DIR="/opt/agent-eval-harness"
+        cd "$PIPELINE_DIR"
+        export PYTHONPATH="$PIPELINE_DIR"
+        python3 scripts/swap_mock_mcp.py \
+          --submission-path "$SUBMISSION_PATH" \
+          --mock-binary "$MOCK_MCP_BINARY"
         echo "=== Mock MCP swap complete ==="
 
     # Validates the AEH submission contract. First of the Tier B (LLM)
@@ -447,7 +498,7 @@ spec:
     # itself (in addition to the cascading prior-step-failure check) and
     # exits 0 immediately when not opted in this run.
     - name: validate
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -517,7 +568,26 @@ spec:
           --aeh-control-config "$EFFECTIVE_AEH_CONTROL_CONFIG" \
           --aeh-treatment-config "$EFFECTIVE_AEH_TREATMENT_CONFIG" \
           | tee /tmp/validation-output.json
-        REPORTS_DIR="${LEG_DIR}/reports/${SUBMISSION_DIR}"
+        # REPORT_KEY INVARIANT: every step that reads/writes under reports/
+        # keys the path by SUBMISSION_NAME (metadata.yaml's `name`), never
+        # by SUBMISSION_DIR (the submissions/<pack>/<skill> path param).
+        # The two only coincide for flat, non-nested submission dirs --
+        # for a nested one like "rh-sre/cve-validation" (name:
+        # cve-validation), writing validation.json under
+        # reports/${SUBMISSION_DIR}/ silently diverges from every later
+        # reader (aggregate-scorecard's reports_dir is SUBMISSION_NAME-
+        # keyed), so validation.json is never found downstream even though
+        # this step printed "Validation PASSED" -- certification then
+        # defaults validation_passed/metadata_valid to False for every
+        # nested submission, regardless of actual quality. Resolve
+        # SUBMISSION_NAME before computing REPORTS_DIR so this step
+        # matches every other reports/ writer in this task.
+        SUBMISSION_NAME=$(python3 -c "
+        import yaml, sys
+        meta = yaml.safe_load(open(sys.argv[1]))
+        print(meta['name'], end='')
+        " "$SUBMISSION_PATH/metadata.yaml")
+        REPORTS_DIR="${LEG_DIR}/reports/${SUBMISSION_NAME}"
         mkdir -p "$REPORTS_DIR"
         cp /tmp/validation-output.json "$REPORTS_DIR/validation.json"
         VALID=$(python3 -c "import json; print(json.load(open('/tmp/validation-output.json'))['valid'])")
@@ -528,11 +598,7 @@ spec:
         echo -n "$EFFECTIVE_AEH_MODE" > "$VARS_DIR/aeh-mode"
         echo -n "$EFFECTIVE_AEH_CONTROL_CONFIG" > "$VARS_DIR/aeh-control-config"
         echo -n "$EFFECTIVE_AEH_TREATMENT_CONFIG" > "$VARS_DIR/aeh-treatment-config"
-        python3 -c "
-        import yaml, sys
-        meta = yaml.safe_load(open(sys.argv[1]))
-        print(meta['name'], end='')
-        " "$SUBMISSION_PATH/metadata.yaml" > "$VARS_DIR/submission-name"
+        echo -n "$SUBMISSION_NAME" > "$VARS_DIR/submission-name"
         python3 -c "
         import yaml, sys
         meta = yaml.safe_load(open(sys.argv[1]))
@@ -548,7 +614,6 @@ spec:
         meta = yaml.safe_load(open(sys.argv[1]))
         print(str(meta.get('skip_quality_review', False)).lower(), end='')
         " "$SUBMISSION_PATH/metadata.yaml" > "$VARS_DIR/skip-quality-review"
-        SUBMISSION_NAME=$(cat "$VARS_DIR/submission-name")
         TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
         echo -n "${TIMESTAMP}_${SUBMISSION_NAME}_$(context.taskRun.name)" > "$VARS_DIR/report-prefix"
         echo "Validation PASSED"
@@ -560,7 +625,7 @@ spec:
     # mechanically derived from submission-dir), LLM always off, always
     # --fail-on-severity high. Only gated on clone-repo's success.
     - name: security-scan
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -614,7 +679,7 @@ spec:
     # clone-repo's success. skillmd-quality-scan.json is leg-root (not
     # REPORT_KEY-scoped); the security findings file is.
     - name: skillmd-scan
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -668,7 +733,7 @@ spec:
     # skillmd-scan. Always exits 0 itself -- the pipeline-level aggregator
     # task applies the actual hard gate.
     - name: emit-tier-a
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       env:
         - name: SUBMISSION_DIR
           value: $(params.submission-dir)
@@ -728,7 +793,7 @@ spec:
 
     # Tier B chain, step 2: LLM-based quality review.
     - name: quality-review
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       env:
         - name: LLM_API_KEY
           value: "$(params.llm-api-key)"
@@ -791,7 +856,7 @@ spec:
     # (enable-aeh-eval-check); always best-effort, excluded from
     # emit-tier-b's failure enumeration.
     - name: aeh-eval-check
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -834,7 +899,7 @@ spec:
     # Tier B chain, observability step. Purely best-effort; excluded from
     # emit-tier-b's failure enumeration.
     - name: write-metrics-checkpoint
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -872,7 +937,7 @@ spec:
 
     # Tier B chain, core evaluation step: runs the AEH evaluation itself.
     - name: run-eval
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       volumeMounts:
         - name: aeh-kubeconfig
           mountPath: /tmp/aeh-kubeconfig
@@ -880,6 +945,19 @@ spec:
       env:
         - name: OPENAI_API_KEY
           value: "$(params.llm-api-key)"
+        # See sitecustomize.py in the AEH image: the `score.py pairwise`
+        # A/B comparison call below runs as a plain subprocess of this
+        # step's own container (never spawned through OpenShiftEnvironment,
+        # which auto-injects this for Harbor trial pods -- see
+        # OpenShiftEnvironment._pod_manifest's env.setdefault), so it needs
+        # this set explicitly to trust the cluster's self-signed ingress
+        # cert on the internal LiteLLM route. Without it, the pairwise
+        # judge call fails SSL verification, surfacing only as a generic
+        # "AB failed: Connection error." with wins_a=wins_b=0 (errors=2),
+        # which drives AEH's evaluation gate to "fail" even when both arms'
+        # own judges scored well.
+        - name: AEH_INSECURE_SSL
+          value: "1"
         - name: SUBMISSION_DIR
           value: $(params.submission-dir)
         - name: SHOULD_EVALUATE
@@ -1099,7 +1177,7 @@ spec:
     # REPORT_KEY fallback as security-scan/skillmd-scan, so this finds
     # whatever those two wrote whether or not validate/run-eval ran.
     - name: analyze-and-scorecard
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       env:
         - name: COMPASS_API_TOKEN
           valueFrom:
@@ -1214,7 +1292,7 @@ spec:
     # case where this leg has a scorecard.json but no report.json by
     # persisting the gate/scorecard rows standalone.
     - name: store
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       env:
         - name: DATABASE_URL
           valueFrom:
@@ -1245,6 +1323,12 @@ spec:
             secretKeyRef:
               name: minio-credentials
               key: root-password
+              optional: true
+        - name: MINIO_INSECURE_SSL
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: insecure-skip-tls-verify
               optional: true
         - name: SUBMISSION_DIR
           value: $(params.submission-dir)
@@ -1382,7 +1466,7 @@ spec:
     # report/scorecard-derived SUCCESS/WARNING/FAILURE verdict. Always
     # exits 0 itself.
     - name: emit-tier-b
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.2
+      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
       env:
         - name: SUBMISSION_DIR
           value: $(params.submission-dir)

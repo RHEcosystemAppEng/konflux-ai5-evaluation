@@ -85,7 +85,7 @@ Tasks).
 | `aeh-kubeconfig-secret` (default `agentic-plugins-konflux-sa-kubeconfig`) | `kubeconfig` | optional | Kubeconfig for a remote evaluation cluster (`run-eval`); when absent, evaluation runs against the Task's own in-cluster credentials. |
 | `compass-facts-api` | `token` | optional | API token for pushing Compass Facts (`analyze-and-scorecard`). |
 | `ab-eval-db-credentials` | `database-url`, `database-tls-route-host` | optional | Postgres connection string / TLS tunnel route host for persisting results (`store`). |
-| `minio-credentials` | `endpoint-url`, `root-user`, `root-password` | optional | MinIO/S3 credentials for publishing report artifacts (`store`). |
+| `minio-credentials` | `endpoint-url`, `root-user`, `root-password`, `insecure-skip-tls-verify` (optional key) | optional | MinIO/S3 credentials for publishing report artifacts (`store`). Set `insecure-skip-tls-verify: "1"` when `endpoint-url` is only reachable through a Route/Ingress with a self-signed or internal-CA certificate. |
 | `llm-credentials` *(indirect)* | n/a | n/a | Not a `secretKeyRef` on this Task -- `run-eval` sets `AGENT_EVAL_K8S_CREDENTIALS_SECRET=llm-credentials` so the harness's own remote-workload runner knows which Secret name to use on the target evaluation cluster. |
 
 No ConfigMaps are used by this Task.
