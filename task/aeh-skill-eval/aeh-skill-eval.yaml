@@ -1,25 +1,38 @@
 # Runs a single skill's full evaluation as one Task, so a Matrix can fan
 # out over it natively (one TaskRun per skill in the Matrix source array).
-# clone-repo/security-scan/skillmd-scan ("Tier A") always run; the Tier B
-# (LLM) chain (validate, quality-review, aeh-eval-check,
-# write-metrics-checkpoint, run-eval, analyze-and-scorecard, store) only
+# materialize-source/security-scan/skillmd-scan ("Tier A") always run; the Tier B
+# (LLM) chain (validate, quality-review, run-eval, analyze-and-scorecard, store) only
 # runs for a leg that is both changed and opted in this run.
 #
-# TWO INDEPENDENT GATING FLAGS:
+# THREE INDEPENDENT GATING FLAGS:
 #   - should-evaluate (pipeline-wide) + this leg's own is-changed flag
 #     (derived by compute-flags below from the changed-skills array) gate
 #     the LLM-cost Tier B steps.
+#   - has-aeh-submission (this leg's own flag, written by validate -- the
+#     FIRST thing it checks, before touching should-evaluate/is-changed's
+#     own gated work): "true" only when
+#     submissions/<submission-dir>/metadata.yaml actually exists on disk.
+#     Most skills in the Compass catalog never commit an AEH submission at
+#     all (no eval.yaml/cases/mock-mcps -- just a plain SKILL.md), so a
+#     changed-and-opted-in leg for one of THOSE skills has nothing for AEH
+#     to evaluate. Every Tier B step below treats
+#     has-aeh-submission=false identically to should-evaluate=false/
+#     is-changed=false (clean exit 0, no-op) instead of crashing trying to
+#     open a metadata.yaml that was never meant to exist.
 #   - enable-persistence independently gates analyze-and-scorecard (Compass
 #     Facts) and store (Postgres/MinIO), regardless of should-evaluate/
-#     is-changed -- these two steps cost no LLM tokens and can persist a
-#     skill's Tier A security/quality gate results even when no LLM
-#     evaluation ran this leg.
+#     is-changed/has-aeh-submission -- these two steps cost no LLM tokens
+#     and can persist a skill's Tier A security/quality gate results even
+#     when no LLM evaluation ran this leg (including skills with no AEH
+#     submission at all -- aggregate_scorecard.py falls back to a
+#     Tier-A-only scorecard for those, see analyze-and-scorecard's own
+#     comment).
 #
 # TWO SEPARATE RESULTS:
-#   - TEST_OUTPUT_TIER_A: derived only from clone-repo/security-scan/
-#     skillmd-scan (see emit-tier-a). This is the pipeline-level hard gate.
+#   - TEST_OUTPUT_TIER_A: derived only from materialize-source/security-scan/
+#     skillmd-scan (see emit-results). This is the pipeline-level hard gate.
 #   - TEST_OUTPUT_TIER_B: derived from the Tier B chain when it actually ran
-#     this leg (see emit-tier-b); `{"result": "SKIPPED", ...}` otherwise --
+#     this leg (see emit-results); `{"result": "SKIPPED", ...}` otherwise --
 #     a "not applicable this run" sentinel, never a failure. Consumers
 #     filter this sentinel out before computing pass/fail counts (see
 #     scripts/aggregate_fanout_result.py).
@@ -35,8 +48,7 @@
 #
 # security-scan/skillmd-scan always run at one uniform strict bar
 # (`--fail-on-severity high`, LLM semantic review off) for every skill,
-# regardless of that skill's own metadata.yaml `security_scan`/
-# `security_scan_use_llm` settings. metadata.yaml's separate
+# regardless of that skill's own metadata.yaml `security_scan` setting. metadata.yaml's separate
 # `gate_policy.security`/`gate_policy.quality` (how the scorecard SCORES
 # those findings) is unaffected -- only how the scan itself runs.
 #
@@ -53,15 +65,15 @@
 # `LEG_DIR="$(workspaces.source.path)/legs/<slug of submission-dir>"` and
 # does all its work under that leg-private subdirectory.
 #
-# RUNTIME ERROR ISOLATION: every step except the final emit-tier-a/
-# emit-tier-b has `onError: continue` plus a cascading skip-guard (checks
+# RUNTIME ERROR ISOLATION: every step except the final emit-results step
+# has `onError: continue` plus a cascading skip-guard (checks
 # earlier steps' exit codes; skips its own work with `exit 0` on an
 # earlier failure instead of also failing). This leg's TaskRun is never
 # marked Failed by Tekton, so one skill's runtime failure never disrupts
 # sibling legs or downstream aggregator tasks.
 #
 # TRUSTED SOURCE ARTIFACT: consumes the pipeline's own trusted Source
-# Artifact via use-trusted-artifact + clone-repo below, not a fresh `git
+# Artifact via use-trusted-artifact + materialize-source below, not a fresh `git
 # clone` -- this Task's pod has no git credentials of its own.
 apiVersion: tekton.dev/v1
 kind: Task
@@ -70,14 +82,13 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: "0.3.0"
+    app.kubernetes.io/version: "0.7.0"
 spec:
   description: >-
     Runs a single skill's full evaluation as one Task, so Matrix can fan
     out over it natively -- one TaskRun per skill in the Matrix source
-    array. clone-repo/security-scan/skillmd-scan always run; the Tier B
-    (LLM) chain (validate/quality-review/aeh-eval-check/
-    write-metrics-checkpoint/run-eval/analyze-and-scorecard/store) only
+    array. materialize-source/security-scan/skillmd-scan always run; the Tier B
+    (LLM) chain (validate/quality-review/run-eval/analyze-and-scorecard/store) only
     runs when should-evaluate AND this leg's own is-changed flag are both
     true. Emits two independent TEST_OUTPUT results -- TEST_OUTPUT_TIER_A
     (hard-gated) and TEST_OUTPUT_TIER_B (informational, "SKIPPED" when
@@ -99,7 +110,15 @@ spec:
         The pipeline's own trusted Source Artifact (clone-repository's
         SOURCE_ARTIFACT result) for submission-revision -- consumed
         instead of a fresh `git clone` since this Task's pod has no
-        GitLab credentials of its own. See the clone-repo step below.
+        GitLab credentials of its own. See the materialize-source step below.
+    - name: image-url
+      type: string
+      default: ""
+      description: Component image repository whose digest receives this leg's report artifact.
+    - name: image-digest
+      type: string
+      default: ""
+      description: Built component image digest to which this leg's report artifact is attached.
     - name: should-evaluate
       type: string
       default: "false"
@@ -155,9 +174,25 @@ spec:
     - name: aeh-mode
       type: string
       default: "single"
+    - name: task-image
+      type: string
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-task@sha256:569cdd8432aaaafef52f5bd7d9f0a05eab0ab618e37e1e35d7b828aa83d738be"
+      description: Preparation, validation, review, reporting and persistence.
+    - name: runner-image
+      type: string
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-runner@sha256:a08f7fbbfcd6209add56c946022697412809bbf43010e4536aef1d6a9f66d34c"
+      description: AEH orchestration for run-eval.
+    - name: security-scan-image
+      type: string
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-security-scan@sha256:cca56cd0f451bda9a2f1d047ad0f636b6d450a4b5b0f63a208d83b97598e9941"
+      description: Cisco deterministic security scan.
+    - name: skillmd-scan-image
+      type: string
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-skillmd-scan@sha256:5c35e22bfb5709941d93a88f1f0ecf4393779a9b77204be8ca26132d78311ad9"
+      description: Deterministic SKILL.md security and quality scan.
     - name: aeh-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-trial@sha256:4f2abcd472a19d76a052bdb48ed38a0f4abd175127a1b44af1bc30e6c1fa19da"
     - name: aeh-model-override
       type: string
       default: ""
@@ -179,16 +214,6 @@ spec:
     - name: workload-namespace
       type: string
       default: "agentic-plugins-evaluation"
-    - name: workload-credentials-secret
-      type: string
-      default: "workload-cluster-credentials"
-    - name: enable-aeh-eval-check
-      type: string
-      default: "false"
-      description: >-
-        When true, run the advisory AEH harness-inventory scan (no gate
-        consumes its output). Defaults off, matching upstream's default,
-        to avoid extra work on every run.
     - name: otel-exporter-endpoint
       type: string
       default: ""
@@ -200,7 +225,7 @@ spec:
       default: /opt/mock-mcp/src/server.py
       description: >-
         Path to the generic-mock-mcp-server entrypoint baked into this
-        Task's image by agentic_eval_flow/templates/Dockerfile.base. The
+        trial image by agentic_eval_flow/containers/aeh-trial/Containerfile. The
         swap-mock-mcp step below rewrites any mcps.json server entry this
         skill mocks (auto-detected from cases/*/mock-mcps/<server>/
         fixture.json -- no separate deploy task or URL plumbing needed) to
@@ -217,13 +242,24 @@ spec:
   results:
     - name: TEST_OUTPUT_TIER_A
       description: >-
-        Standardized Konflux test output derived only from clone-repo/
+        Standardized Konflux test output derived only from materialize-source/
         security-scan/skillmd-scan -- the pipeline's hard gate.
     - name: TEST_OUTPUT_TIER_B
       description: >-
         Standardized Konflux test output derived from the Tier B (LLM)
         chain when it actually ran this leg; {"result": "SKIPPED", ...}
         when should-evaluate/is-changed weren't both true this run.
+    - name: skill-reports-ARTIFACT_OUTPUTS
+      type: object
+      description: >-
+        Per-skill OCI report artifact attached to the built image. The uri
+        and digest form the exact immutable reference to pass to `oras pull`;
+        the skill field identifies this Matrix leg. Named for Tekton Chains'
+        ARTIFACT_OUTPUTS type hint so Chains can collect it as an output.
+      properties:
+        uri: {}
+        digest: {}
+        skill: {}
   volumes:
     - name: aeh-kubeconfig
       secret:
@@ -235,7 +271,7 @@ spec:
     # Unpacks the trusted Source Artifact into /var/workdir/source -- a
     # Task-local emptyDir, not the shared `source` workspace, so concurrent
     # matrix legs never contend for it. onError: continue -- a failure here
-    # is picked up and converted into a cascading-skip by clone-repo below.
+    # is picked up and converted into a cascading-skip by materialize-source below.
     - name: use-trusted-artifact
       image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
       onError: continue
@@ -253,8 +289,8 @@ spec:
     # pipeline is already building, so reusing the trusted artifact avoids
     # re-fetching content that's already sitting in an OCI artifact. Also
     # creates `.baked-vars/` up front so every later step can rely on it.
-    - name: clone-repo
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+    - name: materialize-source
+      image: $(params.task-image)
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -345,60 +381,38 @@ spec:
             print(f"Repaired {repaired} flattened symlink stub(s) under {leg_dir}")
         PYEOF
 
-    # Replaces every symlink still standing after clone-repo (genuine OS
-    # symlinks -- NOT the flattened-stub text files repaired above, which
-    # aren't symlinks any more by the time this runs) with a real copy of
-    # whatever it points to. Several skill packs deliberately symlink
-    # shared reference docs into sibling skills/packs, but run-eval and
-    # Harbor only ever stage the ONE skill/plugin_dirs tree being evaluated
-    # into a trial pod -- a symlink pointing outside that tree resolves
-    # fine on THIS disk but uploads as a dangling link once the pod only
-    # gets that single directory. Runs once, early, so every later step
-    # (security-scan, skillmd-scan, swap-mock-mcp, validate, run-eval) and
-    # the trial pod itself only ever see real files/dirs. onError:
-    # continue, like every other non-load-bearing step -- a broken link
-    # left in place degrades gracefully (same behavior as before this
-    # step existed) instead of failing the whole leg.
-    - name: resolve-symlinks
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
-      onError: continue
-      env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: clone-repo failed earlier"
-          exit 0
-        fi
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-
-        echo "=== PREPARE: Resolve symlinks to real content under ${LEG_DIR} ==="
-        find "$LEG_DIR" -path "*/.git" -prune -o -type l -print0 | \
+        # Resolve remaining real symlinks after repairing flattened stubs.
+        # The evaluation workload stages only one skill/plugin tree, so
+        # links into sibling skills would otherwise be dangling in trial pods.
+        if ! find "$LEG_DIR" -path "*/.git" -prune -o -type l -print0 | \
         while IFS= read -r -d '' link; do
-          target=$(readlink -f "$link")
-
+          target=$(readlink -f "$link") || {
+            echo "Warning: could not resolve symlink: $link"
+            continue
+          }
           if [ ! -e "$target" ]; then
             echo "Skipped (broken link): $link"
             continue
           fi
-
           echo "Resolving: $link -> $target"
-          rm "$link"
-          cp -a "$target" "$link"
-        done
-        echo "Symlink resolution complete."
+          rm "$link" || {
+            echo "Warning: could not remove symlink: $link"
+            continue
+          }
+          cp -a "$target" "$link" || echo "Warning: could not copy symlink target: $link"
+        done; then
+          echo "Warning: some symlinks could not be resolved; continuing"
+        fi
+        echo "Symlink repair and resolution complete."
 
     # Computes this leg's own `is-changed` flag: "true" iff submission-dir
     # is a member of the changed-skills array (identical for every leg).
     # Writes it to .baked-vars/is-changed for later gated steps to read.
     # Uses the $0/$@ positional-array convention for the array param (see
     # update-registered-shas.yaml for the same pattern). Not gated on
-    # clone-repo's success -- this only writes a flag file.
+    # materialize-source's success -- this only writes a flag file.
     - name: compute-flags
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      image: $(params.task-image)
       onError: continue
       command: ["bash", "-c"]
       args:
@@ -428,8 +442,8 @@ spec:
     # anywhere in this submission -- no separate deploy task, URL, or
     # per-skill opt-in flag needed any more) and rewrites exactly those
     # entries in this leg's pack-level mcps.json (e.g. rh-sre/mcps.json) to
-    # a stdio command launching the mock-mcp-binary baked into this image
-    # (see agentic_eval_flow/templates/Dockerfile.base). mcps.json is each
+    # a stdio command launching the mock-mcp-binary baked into the trial image
+    # (see agentic_eval_flow/containers/aeh-trial/Containerfile). mcps.json is each
     # pack's real, committed MCP config, already in the shape Harbor's
     # --mcp-config option expects, so this step only needs to edit it in
     # place -- a pure file-level rewrite of this leg's own ephemeral
@@ -459,7 +473,7 @@ spec:
     # _prepare_enriched_tasks calls the SAME function for local dev runs,
     # with no separate "remember to run this Tekton step" footgun.
     - name: swap-mock-mcp
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      image: $(params.task-image)
       onError: continue
       env:
         - name: MOCK_MCP_BINARY
@@ -479,8 +493,8 @@ spec:
           echo "Skipping: mock MCP swap not applicable this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED)"
           exit 0
         fi
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: clone-repo failed earlier"
+        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
+          echo "Skipping: materialize-source failed earlier"
           exit 0
         fi
         echo "=== PREPARE: Swap mock MCP servers into pack mcps.json ==="
@@ -498,7 +512,7 @@ spec:
     # itself (in addition to the cascading prior-step-failure check) and
     # exits 0 immediately when not opted in this run.
     - name: validate
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      image: $(params.task-image)
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -524,15 +538,38 @@ spec:
         fi
         # Cascading skip: if an earlier step already had a runtime error,
         # there's nothing useful for this step to do -- skip cleanly
-        # (exit 0, not a NEW failure) so emit-tier-b sees only the
+        # (exit 0, not a NEW failure) so emit-results sees only the
         # ORIGINAL failure when it checks every step's exit code.
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: clone-repo failed earlier"
+        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
+          echo "Skipping: materialize-source failed earlier"
           exit 0
         fi
         echo "=== PREPARE: Validate Submission ==="
         PIPELINE_DIR="/opt/agent-eval-harness"
         SUBMISSION_PATH="${LEG_DIR}/submissions/${SUBMISSION_DIR}"
+
+        # Most skills in the Compass catalog never commit an AEH submission
+        # at all (no submissions/<pack>/<skill>/ -- they're basic
+        # Claude-skill packs with no eval.yaml/cases/mock-mcps, e.g.
+        # rh-basic's own skills). is-changed/should-evaluate only tell us
+        # this skill was changed and opted in via the "evaluate" label --
+        # NOT that it has anything for AEH to evaluate. Treat "no
+        # metadata.yaml at all" as not applicable this run (same as an
+        # unmet is-changed/should-evaluate gate) rather than letting every
+        # python3 -c below crash with FileNotFoundError on a path that was
+        # never meant to exist. scripts/validate.py itself already handles
+        # a missing metadata.yaml gracefully (reports it as a validation
+        # error instead of crashing) -- but that's for a submission that
+        # DOES exist and is merely incomplete; a submission that doesn't
+        # exist on disk at all isn't a validation failure, it's "this skill
+        # doesn't participate in AEH evaluation."
+        if [ ! -f "$SUBMISSION_PATH/metadata.yaml" ]; then
+          echo "Skipping: no AEH submission committed for $SUBMISSION_DIR (no submissions/$SUBMISSION_DIR/metadata.yaml) -- this skill has no AEH evaluation setup"
+          echo -n "false" > "$VARS_DIR/has-aeh-submission"
+          exit 0
+        fi
+        echo -n "true" > "$VARS_DIR/has-aeh-submission"
+
         cd "$PIPELINE_DIR"
         export PYTHONPATH="$PIPELINE_DIR"
 
@@ -602,16 +639,6 @@ spec:
         python3 -c "
         import yaml, sys
         meta = yaml.safe_load(open(sys.argv[1]))
-        print(meta.get('security_scan', 'warn'), end='')
-        " "$SUBMISSION_PATH/metadata.yaml" > "$VARS_DIR/submission-security-scan"
-        python3 -c "
-        import yaml, sys
-        meta = yaml.safe_load(open(sys.argv[1]))
-        print(str(meta.get('security_scan_use_llm', True)).lower(), end='')
-        " "$SUBMISSION_PATH/metadata.yaml" > "$VARS_DIR/security-scan-use-llm"
-        python3 -c "
-        import yaml, sys
-        meta = yaml.safe_load(open(sys.argv[1]))
         print(str(meta.get('skip_quality_review', False)).lower(), end='')
         " "$SUBMISSION_PATH/metadata.yaml" > "$VARS_DIR/skip-quality-review"
         TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
@@ -623,9 +650,9 @@ spec:
     # Tier A security scan: always runs regardless of should-evaluate/
     # is-changed, scanning the skill's real pack directory (skill-dir,
     # mechanically derived from submission-dir), LLM always off, always
-    # --fail-on-severity high. Only gated on clone-repo's success.
+    # --fail-on-severity high. Only gated on materialize-source's success.
     - name: security-scan
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      image: $(params.security-scan-image)
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -633,8 +660,8 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: clone-repo failed earlier"
+        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
+          echo "Skipping: materialize-source failed earlier"
           exit 0
         fi
         echo "=== TEST: Security Scan (Tier A, always runs, LLM forced off) ==="
@@ -658,7 +685,7 @@ spec:
           exit 1
         fi
         if ! command -v skill-scanner >/dev/null 2>&1; then
-          echo "ERROR: skill-scanner not found in image -- rebuild agent-eval-harness with the current Containerfile" >&2
+          echo "ERROR: skill-scanner not found in image -- rebuild the image assigned to this step" >&2
           exit 1
         fi
         # --use-llm is intentionally never passed here -- LLM is always
@@ -676,10 +703,10 @@ spec:
         echo "Security scan complete"
 
     # Tier A SKILL.md scan (harness-eval): always runs, gated only on
-    # clone-repo's success. skillmd-quality-scan.json is leg-root (not
+    # materialize-source's success. skillmd-quality-scan.json is leg-root (not
     # REPORT_KEY-scoped); the security findings file is.
     - name: skillmd-scan
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      image: $(params.skillmd-scan-image)
       onError: continue
       env:
         - name: SUBMISSION_DIR
@@ -689,8 +716,8 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: clone-repo failed earlier"
+        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
+          echo "Skipping: materialize-source failed earlier"
           exit 0
         fi
         echo "=== TEST: SKILL.md Scan (harness-eval, Tier A, always runs) ==="
@@ -708,10 +735,15 @@ spec:
 
         HARNESS_VERSION="$HARNESS_EVAL_VERSION"
         if ! command -v harness-eval >/dev/null 2>&1; then
-          echo "ERROR: harness-eval not found in image -- rebuild agent-eval-harness with the current Containerfile" >&2
+          echo "ERROR: harness-eval not found in image -- rebuild the image assigned to this step" >&2
           exit 1
         fi
-        echo "Using baked-in harness-eval ($(harness-eval --version 2>/dev/null || echo present))"
+        BAKED_HARNESS_VERSION=$(python3 -c 'from importlib.metadata import version; print(version("harness-eval"))')
+        if [ "$BAKED_HARNESS_VERSION" != "$HARNESS_VERSION" ]; then
+          echo "ERROR: expected harness-eval==$HARNESS_VERSION, image contains $BAKED_HARNESS_VERSION" >&2
+          exit 1
+        fi
+        echo "Using baked-in harness-eval $BAKED_HARNESS_VERSION"
 
         echo "Scanning: $SKILL_PATH (harness-eval==$HARNESS_VERSION)"
         harness-eval skill-submission-scan "$SKILL_PATH" \
@@ -729,71 +761,9 @@ spec:
         done
         echo "SKILL.md scan complete"
 
-    # Emits TEST_OUTPUT_TIER_A, derived only from clone-repo/security-scan/
-    # skillmd-scan. Always exits 0 itself -- the pipeline-level aggregator
-    # task applies the actual hard gate.
-    - name: emit-tier-a
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
-      env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        echo "=== EMIT KONFLUX TEST_OUTPUT_TIER_A ==="
-
-        FAILED_STEP=""
-        FAILED_EXIT=""
-        for pair in \
-          "clone-repo:$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" \
-          "security-scan:$(cat "$(steps.step-security-scan.exitCode.path)" 2>/dev/null || echo 0)" \
-          "skillmd-scan:$(cat "$(steps.step-skillmd-scan.exitCode.path)" 2>/dev/null || echo 0)"
-        do
-          name="${pair%%:*}"
-          code="${pair##*:}"
-          if [ "$code" != "0" ] && [ -z "$FAILED_STEP" ]; then
-            FAILED_STEP="$name"
-            FAILED_EXIT="$code"
-          fi
-        done
-        if [ -n "$FAILED_STEP" ]; then
-          echo "Failure detected: step '$FAILED_STEP' exited $FAILED_EXIT"
-        fi
-
-        FAILED_STEP="$FAILED_STEP" FAILED_EXIT="$FAILED_EXIT" SUBMISSION_DIR="$SUBMISSION_DIR" python3 -c "
-        import json, datetime, os
-        from pathlib import Path
-
-        failed_step = os.environ.get('FAILED_STEP', '')
-        failed_exit = os.environ.get('FAILED_EXIT', '')
-        submission_dir = os.environ.get('SUBMISSION_DIR', '')
-
-        if failed_step:
-            result = 'FAILURE'
-            note = f\"{submission_dir}: step '{failed_step}' exited {failed_exit}\"
-        else:
-            result = 'SUCCESS'
-            note = f'{submission_dir}: clone-repo/security-scan/skillmd-scan all passed'
-
-        counts = {'SUCCESS': (1, 0, 0), 'FAILURE': (0, 1, 0)}
-        successes, failures, warnings = counts.get(result, (0, 1, 0))
-
-        payload = {
-            'result': result,
-            'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'note': note,
-            'successes': successes,
-            'failures': failures,
-            'warnings': warnings,
-        }
-        print(json.dumps(payload))
-        Path('$(results.TEST_OUTPUT_TIER_A.path)').write_text(json.dumps(payload))
-        "
-        echo "=== TEST_OUTPUT_TIER_A emitted ==="
-
     # Tier B chain, step 2: LLM-based quality review.
     - name: quality-review
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      image: $(params.task-image)
       env:
         - name: LLM_API_KEY
           value: "$(params.llm-api-key)"
@@ -815,11 +785,12 @@ spec:
         LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
         VARS_DIR="${LEG_DIR}/.baked-vars"
         IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ]; then
-          echo "Skipping: not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED)"
+        HAS_AEH_SUBMISSION=$(cat "${VARS_DIR}/has-aeh-submission" 2>/dev/null || echo "false")
+        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ] || [ "$HAS_AEH_SUBMISSION" != "true" ]; then
+          echo "Skipping: not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED, has-aeh-submission=$HAS_AEH_SUBMISSION)"
           exit 0
         fi
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
+        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
            [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
            [ "$(cat "$(steps.step-security-scan.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
            [ "$(cat "$(steps.step-skillmd-scan.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
@@ -836,7 +807,7 @@ spec:
         # imports it directly. Fail loudly instead of a runtime pip
         # install; containers are immutable.
         if ! python3 -c "import openai" >/dev/null 2>&1; then
-          echo "ERROR: openai not found in image -- rebuild agent-eval-harness with the current Containerfile" >&2
+          echo "ERROR: openai not found in image -- rebuild the image assigned to this step" >&2
           exit 1
         fi
         PIPELINE_DIR="/opt/agent-eval-harness"
@@ -852,92 +823,23 @@ spec:
         PASSED=$(python3 -c "import json; print(str(json.load(open('/tmp/review-output.json')).get('passed', False)).lower())" 2>/dev/null || echo "true")
         echo "Quality review: passed=$PASSED"
 
-    # Tier B chain, advisory step: harness-inventory scan. Off by default
-    # (enable-aeh-eval-check); always best-effort, excluded from
-    # emit-tier-b's failure enumeration.
-    - name: aeh-eval-check
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
-      onError: continue
-      env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: SHOULD_EVALUATE
-          value: $(params.should-evaluate)
-        - name: ENABLE_AEH_EVAL_CHECK
-          value: $(params.enable-aeh-eval-check)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ]; then
-          echo "Skipping: not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED)"
-          exit 0
-        fi
-        if [ "$ENABLE_AEH_EVAL_CHECK" != "true" ]; then
-          echo "Skipping AEH eval-check (enable-aeh-eval-check=$ENABLE_AEH_EVAL_CHECK)"
-          exit 0
-        fi
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: an earlier step failed"
-          exit 0
-        fi
-        echo "=== TEST: AEH eval-check (advisory inventory) ==="
-        SUBMISSION_NAME=$(cat "$VARS_DIR/submission-name")
-        SUBMISSION_PATH="${LEG_DIR}/submissions/${SUBMISSION_DIR}"
-        OUT_DIR="${LEG_DIR}/reports/${SUBMISSION_NAME}"
-        mkdir -p "$OUT_DIR"
-        python /opt/agent-eval-harness/scripts/run_aeh_eval_check.py \
-          --enabled true \
-          --root "$SUBMISSION_PATH" \
-          --output "$OUT_DIR/harness-inventory.yaml" \
-          2>&1 || echo "Warning: AEH eval-check failed to run (non-blocking)"
-
-    # Tier B chain, observability step. Purely best-effort; excluded from
-    # emit-tier-b's failure enumeration.
-    - name: write-metrics-checkpoint
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
-      onError: continue
-      env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: SHOULD_EVALUATE
-          value: $(params.should-evaluate)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ]; then
-          echo "Skipping: not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED)"
-          exit 0
-        fi
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: an earlier step failed"
-          exit 0
-        fi
-        echo "=== TEST: Write Metrics Checkpoint ==="
+        # Preserve review token usage for the later store step, which writes
+        # it to the observability-metrics table. Keep this in the review
+        # step so checkpoint bookkeeping needs no separate container.
         SUBMISSION_NAME=$(cat "$VARS_DIR/submission-name")
         REPORT_DIR="${LEG_DIR}/reports/${SUBMISSION_NAME}"
-        REVIEW_FILE="${LEG_DIR}/_ai_review.json"
         mkdir -p "$REPORT_DIR"
         export PYTHONPATH="/opt/agent-eval-harness"
         python3 /opt/agent-eval-harness/scripts/write_metrics_checkpoint.py \
           --run-id "$(context.taskRun.name)" \
           --submission-name "$SUBMISSION_NAME" \
           --report-dir "$REPORT_DIR" \
-          --review-file "$REVIEW_FILE" \
+          --review-file "${LEG_DIR}/_ai_review.json" \
           2>&1 || echo "Warning: metrics checkpoint failed (non-blocking)"
 
     # Tier B chain, core evaluation step: runs the AEH evaluation itself.
     - name: run-eval
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      image: $(params.runner-image)
       volumeMounts:
         - name: aeh-kubeconfig
           mountPath: /tmp/aeh-kubeconfig
@@ -988,17 +890,18 @@ spec:
         LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
         VARS_DIR="${LEG_DIR}/.baked-vars"
         IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ]; then
-          echo "Skipping: not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED)"
+        HAS_AEH_SUBMISSION=$(cat "${VARS_DIR}/has-aeh-submission" 2>/dev/null || echo "false")
+        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ] || [ "$HAS_AEH_SUBMISSION" != "true" ]; then
+          echo "Skipping: not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED, has-aeh-submission=$HAS_AEH_SUBMISSION)"
           exit 0
         fi
         # Deliberately NOT gated on security-scan/skillmd-scan/
         # quality-review's exit codes -- those are hard-gated independently
         # at the pipeline level (see header, TWO SEPARATE RESULTS); a
         # finding there should not prevent the real AEH evaluation from
-        # running and being scored/persisted. Only a genuine clone-repo/
+        # running and being scored/persisted. Only a genuine materialize-source/
         # validate failure (no usable submission at all) skips run-eval.
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
+        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
            [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
           echo "Skipping: an earlier step failed"
           exit 0
@@ -1029,10 +932,9 @@ spec:
           unset KUBERNETES_SERVICE_HOST KUBERNETES_SERVICE_PORT 2>/dev/null || true
           WORKLOAD_NS="$WORKLOAD_NAMESPACE_PARAM"
           if [ -n "$WORKLOAD_NS" ]; then
-            kubectl config set-context --current --namespace="$WORKLOAD_NS" 2>/dev/null || true
             export AGENT_EVAL_K8S_NAMESPACE="$WORKLOAD_NS"
           else
-            AGENT_EVAL_K8S_NAMESPACE=$(kubectl config view --minify -o jsonpath='{.contexts[0].context.namespace}' 2>/dev/null || echo "default")
+            AGENT_EVAL_K8S_NAMESPACE=$(python3 -c 'from kubernetes.config import list_kube_config_contexts; _, context = list_kube_config_contexts(); print((context or {}).get("context", {}).get("namespace", "default"))')
             export AGENT_EVAL_K8S_NAMESPACE
           fi
         else
@@ -1127,6 +1029,8 @@ spec:
             --control-dir "$CONTROL_DIR" \
             --submission-name "$SUBMISSION_NAME" \
             --threshold "$AEH_THRESHOLD" \
+            --treatment-config "$SUBMISSION_PATH/$TREATMENT_CONFIG" \
+            --control-config "$SUBMISSION_PATH/$CONTROL_CONFIG" \
             --output "$REPORT_DIR/report.json"
         else
           echo "=== AEH Single Evaluation ==="
@@ -1154,6 +1058,7 @@ spec:
           python scripts/aggregate_aeh.py "$OUT_DIR" \
             --submission-name "$SUBMISSION_NAME" \
             --threshold "$AEH_THRESHOLD" \
+            --config "$SUBMISSION_PATH/$EVAL_CONFIG" \
             --output "$REPORT_DIR/report.json"
         fi
 
@@ -1162,14 +1067,6 @@ spec:
           exit "$AEH_EXIT"
         fi
 
-        REC=$(python3 -c "
-        import json
-        r = json.load(open('$REPORT_DIR/report.json'))
-        s = r.get('summary', {})
-        print(s.get('recommendation', 'fail'))
-        ")
-        echo -n "$REC" > "$VARS_DIR/recommendation"
-        echo "Recommendation: $REC"
         echo "=== Evaluate phase complete ==="
 
     # Scorecard/Compass-Facts step, gated on enable-persistence only (see
@@ -1177,7 +1074,7 @@ spec:
     # REPORT_KEY fallback as security-scan/skillmd-scan, so this finds
     # whatever those two wrote whether or not validate/run-eval ran.
     - name: analyze-and-scorecard
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      image: $(params.task-image)
       env:
         - name: COMPASS_API_TOKEN
           valueFrom:
@@ -1211,11 +1108,11 @@ spec:
         # validate/quality-review/run-eval may be intentionally
         # flag-skipped (exit 0) -- that's fine, this step still proceeds
         # on whatever Tier A artifacts security-scan/skillmd-scan
-        # produced. Only a genuine clone-repo/validate/run-eval failure
+        # produced. Only a genuine materialize-source/validate/run-eval failure
         # skips this step; a security-scan/skillmd-scan/quality-review
         # failure does not (aggregate_scorecard.py reads their findings
         # from disk regardless of exit code).
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
+        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
            [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
            [ "$(cat "$(steps.step-run-eval.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
           echo "Skipping: an earlier step failed"
@@ -1224,7 +1121,7 @@ spec:
         echo "=== ANALYZE + SCORECARD ==="
         if [ -n "$OTEL_EXPORTER_OTLP_ENDPOINT" ]; then
           echo "OTEL tracing enabled -> $OTEL_EXPORTER_OTLP_ENDPOINT"
-          pip install --quiet --no-cache-dir opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc 2>&1 | tail -3
+          python3 -c "import opentelemetry.sdk; import opentelemetry.exporter.otlp.proto.grpc.trace_exporter"
         fi
         # See the header's REPORT_KEY INVARIANT note.
         SUBMISSION_NAME=$(cat "${VARS_DIR}/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
@@ -1245,22 +1142,9 @@ spec:
         print(f\"Recommendation: {s.get('recommendation', 'N/A')}\")
         print(f\"Mean reward: {t.get('mean_reward', 'N/A')}\")
         " "$REPORT_DIR/report.json"
-        elif [ -d "$RESULTS_DIR" ]; then
-          echo "=== No pre-computed report, running analyze.py ==="
-          python scripts/analyze.py \
-            --results-dir "$RESULTS_DIR" \
-            --output-dir "$REPORT_DIR" \
-            --submission-name "$SUBMISSION_NAME" \
-            --threshold "0.0" \
-            --eval-engine aeh \
-            --commit-sha "$SUBMISSION_REVISION" \
-            --pipeline-run-id "$(context.taskRun.name)"
+          python scripts/analyze.py --report-json "$REPORT_DIR/report.json"
         else
-          # No report.json AND no eval-results dir -- run-eval wasn't
-          # opted in this leg. analyze.py requires --results-dir to
-          # exist, so skip straight to gate aggregation below, which
-          # works fine from Tier A's security/quality artifacts alone.
-          echo "=== No eval report or results available (Tier B chain not opted in this leg) -- proceeding with Tier A-only scorecard aggregation ==="
+          echo "No AEH report: aggregating Tier A scan results only"
         fi
 
         echo "=== Aggregating Unified Scorecard ==="
@@ -1287,12 +1171,149 @@ spec:
         python3 /opt/agent-eval-harness/scripts/print_compass_facts_debug.py --report-dir "$REPORT_DIR" || true
         echo "=== Analysis complete ==="
 
+    # Package the same report objects the MinIO publisher writes and attach
+    # them as an OCI referrer to the built component image.
+    - name: package-oci-reports
+      image: $(params.task-image)
+      onError: continue
+      env:
+        - name: SUBMISSION_DIR
+          value: $(params.submission-dir)
+        - name: ENABLE_PERSISTENCE
+          value: $(params.enable-persistence)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "$ENABLE_PERSISTENCE" != "true" ]; then
+          echo "Skipping OCI report package: persistence disabled"
+          exit 0
+        fi
+        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
+        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
+        VARS_DIR="${LEG_DIR}/.baked-vars"
+        SUBMISSION_NAME=$(cat "${VARS_DIR}/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
+        REPORT_PREFIX=$(cat "${VARS_DIR}/report-prefix" 2>/dev/null || echo "$(date -u +%Y%m%d_%H%M%S)_${SUBMISSION_NAME}_$(context.taskRun.name)")
+        REPORT_DIR="${LEG_DIR}/reports/${SUBMISSION_NAME}"
+        ARCHIVE_DIR="${LEG_DIR}/oci-artifacts"
+        ARCHIVE_NAME="${LEG_SLUG}-reports.tar.gz"
+        ARCHIVE="${ARCHIVE_DIR}/${ARCHIVE_NAME}"
+        REPORT_DIR="$REPORT_DIR" LEG_DIR="$LEG_DIR" SUBMISSION_NAME="$SUBMISSION_NAME" REPORT_PREFIX="$REPORT_PREFIX" ARCHIVE="$ARCHIVE" python3 - <<'PYEOF'
+        import io
+        import json
+        import os
+        import tarfile
+        from pathlib import Path
+
+        report_dir = Path(os.environ["REPORT_DIR"])
+        leg_dir = Path(os.environ["LEG_DIR"])
+        submission_name = os.environ["SUBMISSION_NAME"]
+        prefix = os.environ["REPORT_PREFIX"]
+        archive = Path(os.environ["ARCHIVE"])
+        objects = {}
+
+        def add(path, object_name):
+            path = Path(path)
+            if path.is_file():
+                objects[f"{prefix}/{object_name}"] = (path, None)
+
+        # Core and Tier A report objects from publish.py.
+        for name in ("report.json", "report.md", "scorecard.json", "certification.json"):
+            add(report_dir / name, name)
+        for name in ("security-scan.json", "security-scan.sarif", "skillmd-security-scan.json"):
+            add(report_dir / name, f"security_scans/{name}")
+        add(leg_dir / "skillmd-quality-scan.json", "security_scans/skillmd-quality-scan.json")
+
+        # Match publish.py's AEH run discovery and debug/aeh object layout.
+        reports_root = leg_dir / "reports"
+        roots = [report_dir] if report_dir.is_dir() else []
+        if reports_root.is_dir():
+            roots.extend(path for path in sorted(reports_root.iterdir()) if path.is_dir() and path != report_dir)
+        seen = set()
+        for root in roots:
+            for run_dir in sorted(root.iterdir()):
+                if not run_dir.is_dir() or not ((run_dir / "summary.yaml").is_file() or (run_dir / "run_result.json").is_file()):
+                    continue
+                if run_dir.resolve() in seen:
+                    continue
+                seen.add(run_dir.resolve())
+                for path in sorted(run_dir.rglob("*")):
+                    if path.is_file():
+                        add(path, f"debug/aeh/{run_dir.name}/{path.relative_to(run_dir).as_posix()}")
+
+        add(leg_dir / "_ai_review.json", "scaffolded/ai_review.json")
+
+        if not objects:
+            print("No MinIO report objects found; no OCI archive created")
+        else:
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(archive, "w:gz") as tar:
+                for name, (path, content) in sorted(objects.items()):
+                    if content is None:
+                        tar.add(path, arcname=name, recursive=False)
+                    else:
+                        info = tarfile.TarInfo(name)
+                        info.size = len(content)
+                        tar.addfile(info, io.BytesIO(content))
+            print(f"Packaged {len(objects)} MinIO report object(s) into {archive}")
+        PYEOF
+
+    - name: attach-oci-reports
+      image: quay.io/konflux-ci/task-runner:3.3.0@sha256:0428af436f6942544009e38ef452a6b747e9ec79ab22fd402a3d59585984cf81
+      onError: continue
+      env:
+        - name: ENABLE_PERSISTENCE
+          value: $(params.enable-persistence)
+        - name: IMAGE_URL
+          value: $(params.image-url)
+        - name: IMAGE_DIGEST
+          value: $(params.image-digest)
+        - name: SUBMISSION_DIR
+          value: $(params.submission-dir)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "$ENABLE_PERSISTENCE" != "true" ]; then
+          echo "Skipping OCI report attach: persistence disabled"
+          exit 0
+        fi
+        if [ -z "$IMAGE_URL" ] || [ -z "$IMAGE_DIGEST" ]; then
+          echo "No built image URL/digest supplied; skipping OCI report attach"
+          exit 0
+        fi
+        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
+        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
+        ARCHIVE_DIR="${LEG_DIR}/oci-artifacts"
+        ARCHIVE_NAME="${LEG_SLUG}-reports.tar.gz"
+        ARCHIVE="${ARCHIVE_DIR}/${ARCHIVE_NAME}"
+        if [ ! -s "$ARCHIVE" ]; then
+          echo "No MinIO report objects were packaged; skipping OCI report attach"
+          exit 0
+        fi
+        echo "Selecting registry auth for ${IMAGE_URL}"
+        select-oci-auth "$IMAGE_URL" > "$HOME/auth.json"
+        cd "$ARCHIVE_DIR"
+        echo "Attaching ${ARCHIVE_NAME} to ${IMAGE_URL}@${IMAGE_DIGEST}"
+        ATTACH_OUTPUT=$(retry oras attach --no-tty --registry-config "$HOME/auth.json" \
+          --artifact-type application/vnd.agentic-eval.reports.v1 \
+          "${IMAGE_URL}@${IMAGE_DIGEST}" \
+          "${ARCHIVE_NAME}:application/gzip" 2>&1) || { echo "$ATTACH_OUTPUT"; exit 1; }
+        echo "$ATTACH_OUTPUT"
+        ATTACH_DIGEST=$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's/^Digest: //p' | tail -n 1)
+        if [[ ! "$ATTACH_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          echo "ERROR: oras attach did not report a valid artifact manifest digest"
+          exit 1
+        fi
+        printf '{"uri":"%s","digest":"%s","skill":"%s"}' \
+          "$IMAGE_URL" "$ATTACH_DIGEST" "$SUBMISSION_DIR" \
+          > "$(results.skill-reports-ARTIFACT_OUTPUTS.path)"
+        echo "Report pull reference: ${IMAGE_URL}@${ATTACH_DIGEST} (skill=${SUBMISSION_DIR})"
+
     # Persists results to Postgres/MinIO, gated on enable-persistence only
     # (same as analyze-and-scorecard above). store_results.py handles the
     # case where this leg has a scorecard.json but no report.json by
     # persisting the gate/scorecard rows standalone.
     - name: store
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+      image: $(params.task-image)
       env:
         - name: DATABASE_URL
           valueFrom:
@@ -1351,7 +1372,7 @@ spec:
         # security-scan/skillmd-scan/quality-review failure does not skip
         # store -- their findings are hard-gated independently, not a
         # reason to withhold persisting this leg's eval/scorecard results.
-        if [ "$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
+        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
            [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
            [ "$(cat "$(steps.step-run-eval.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
            [ "$(cat "$(steps.step-analyze-and-scorecard.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
@@ -1365,7 +1386,6 @@ spec:
         # the same shape (timestamp_name_runid) here when validate didn't
         # run this leg.
         REPORT_PREFIX=$(cat "${VARS_DIR}/report-prefix" 2>/dev/null || echo "$(date -u +%Y%m%d_%H%M%S)_${SUBMISSION_NAME}_$(context.taskRun.name)")
-        RECOMMENDATION=$(cat "$VARS_DIR/recommendation" 2>/dev/null || echo "fail")
         PIPELINE_DIR="/opt/agent-eval-harness"
         cd "$PIPELINE_DIR"
         export PYTHONPATH="$PIPELINE_DIR"
@@ -1445,10 +1465,7 @@ spec:
             --report-dir "$REPORT_DIR" \
             --submission-name "$SUBMISSION_NAME" \
             --pipeline-run-id "$(context.taskRun.name)" \
-            --recommendation "$RECOMMENDATION" \
-            --uplift-threshold "-1.0" \
             --minio-bucket "ab-eval-reports" \
-            --commit-sha "$SUBMISSION_REVISION" \
             --eval-engine aeh \
             --workspace-root "${LEG_DIR}" \
             --report-prefix "$REPORT_PREFIX"
@@ -1457,7 +1474,7 @@ spec:
         fi
         echo "=== Store complete ==="
 
-    # Emits TEST_OUTPUT_TIER_B. Always runs (final aggregator, no
+    # Emits both TEST_OUTPUT_TIER_A and TEST_OUTPUT_TIER_B. Always runs (final aggregator, no
     # onError/skip-guard). Checks should-evaluate/is-changed first: if the
     # chain was flag-skipped, every gated step above trivially exited 0,
     # which would otherwise be misread as a genuine SUCCESS -- so this
@@ -1465,8 +1482,8 @@ spec:
     # exit code, emitting "ERROR" on a genuine runtime failure, else a
     # report/scorecard-derived SUCCESS/WARNING/FAILURE verdict. Always
     # exits 0 itself.
-    - name: emit-tier-b
-      image: quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+    - name: emit-results
+      image: $(params.task-image)
       env:
         - name: SUBMISSION_DIR
           value: $(params.submission-dir)
@@ -1475,7 +1492,50 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        echo "=== EMIT KONFLUX TEST_OUTPUT_TIER_B ==="
+        echo "=== EMIT KONFLUX TEST_OUTPUT_TIER_A + TEST_OUTPUT_TIER_B ==="
+
+        TIER_A_FAILED_STEP=""
+        TIER_A_FAILED_EXIT=""
+        for pair in \
+          "materialize-source:$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" \
+          "security-scan:$(cat "$(steps.step-security-scan.exitCode.path)" 2>/dev/null || echo 0)" \
+          "skillmd-scan:$(cat "$(steps.step-skillmd-scan.exitCode.path)" 2>/dev/null || echo 0)"
+        do
+          name="${pair%%:*}"
+          code="${pair##*:}"
+          if [ "$code" != "0" ] && [ -z "$TIER_A_FAILED_STEP" ]; then
+            TIER_A_FAILED_STEP="$name"
+            TIER_A_FAILED_EXIT="$code"
+          fi
+        done
+        TIER_A_FAILED_STEP="$TIER_A_FAILED_STEP" TIER_A_FAILED_EXIT="$TIER_A_FAILED_EXIT" SUBMISSION_DIR="$SUBMISSION_DIR" python3 - <<'PYEOF'
+        import datetime
+        import json
+        import os
+        from pathlib import Path
+
+        failed_step = os.environ.get("TIER_A_FAILED_STEP", "")
+        failed_exit = os.environ.get("TIER_A_FAILED_EXIT", "")
+        submission_dir = os.environ.get("SUBMISSION_DIR", "")
+        if failed_step:
+            result = "FAILURE"
+            note = f"{submission_dir}: step '{failed_step}' exited {failed_exit}"
+        else:
+            result = "SUCCESS"
+            note = f"{submission_dir}: materialize-source/security-scan/skillmd-scan all passed"
+        successes, failures = (1, 0) if result == "SUCCESS" else (0, 1)
+        payload = {
+            "result": result,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "note": note,
+            "successes": successes,
+            "failures": failures,
+            "warnings": 0,
+        }
+        Path('$(results.TEST_OUTPUT_TIER_A.path)').write_text(json.dumps(payload))
+        print(json.dumps(payload))
+        PYEOF
+
         LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
         LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
         VARS_DIR="${LEG_DIR}/.baked-vars"
@@ -1484,23 +1544,34 @@ spec:
         REPORT_DIR="${LEG_DIR}/reports/${SUBMISSION_NAME}"
 
         IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ]; then
-          echo "Not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED) -- emitting SKIPPED"
-          SUBMISSION_DIR="$SUBMISSION_DIR" SHOULD_EVALUATE="$SHOULD_EVALUATE" IS_CHANGED="$IS_CHANGED" python3 -c "
+        HAS_AEH_SUBMISSION=$(cat "${VARS_DIR}/has-aeh-submission" 2>/dev/null || echo "false")
+        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ] || [ "$HAS_AEH_SUBMISSION" != "true" ]; then
+          echo "Not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED, has-aeh-submission=$HAS_AEH_SUBMISSION) -- emitting SKIPPED"
+          SUBMISSION_DIR="$SUBMISSION_DIR" SHOULD_EVALUATE="$SHOULD_EVALUATE" IS_CHANGED="$IS_CHANGED" HAS_AEH_SUBMISSION="$HAS_AEH_SUBMISSION" python3 -c "
         import json, datetime, os
         from pathlib import Path
 
         submission_dir = os.environ.get('SUBMISSION_DIR', '')
         should_evaluate = os.environ.get('SHOULD_EVALUATE', '')
         is_changed = os.environ.get('IS_CHANGED', '')
+        has_aeh_submission = os.environ.get('HAS_AEH_SUBMISSION', '')
+
+        if has_aeh_submission != 'true':
+            note = (
+                f'{submission_dir}: no AEH submission committed for this skill '
+                f'(no submissions/{submission_dir}/metadata.yaml) -- Tier B (LLM) '
+                f'evaluation does not apply'
+            )
+        else:
+            note = (
+                f'{submission_dir}: Tier B (LLM) evaluation not applicable this run '
+                f'(should-evaluate={should_evaluate}, is-changed={is_changed})'
+            )
 
         payload = {
             'result': 'SKIPPED',
             'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'note': (
-                f'{submission_dir}: Tier B (LLM) evaluation not applicable this run '
-                f'(should-evaluate={should_evaluate}, is-changed={is_changed})'
-            ),
+            'note': note,
             'successes': 0,
             'failures': 0,
             'warnings': 0,
@@ -1514,14 +1585,12 @@ spec:
 
         FAILED_STEP=""
         FAILED_EXIT=""
-        # aeh-eval-check/write-metrics-checkpoint are excluded: both are
-        # best-effort/advisory and always exit 0 by design. security-scan/
-        # skillmd-scan are also excluded: their hard-fail verdict is
-        # reported via TEST_OUTPUT_TIER_A/emit-tier-a, not here -- a
+        # security-scan/skillmd-scan are excluded: their hard-fail verdict
+        # is reported via TEST_OUTPUT_TIER_A above, not here -- a
         # security-scan/skillmd-scan failure must not masquerade as a Tier
         # B runtime error and hide the real eval/scorecard verdict.
         for pair in \
-          "clone-repo:$(cat "$(steps.step-clone-repo.exitCode.path)" 2>/dev/null || echo 0)" \
+          "materialize-source:$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" \
           "validate:$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" \
           "quality-review:$(cat "$(steps.step-quality-review.exitCode.path)" 2>/dev/null || echo 0)" \
           "run-eval:$(cat "$(steps.step-run-eval.exitCode.path)" 2>/dev/null || echo 0)" \

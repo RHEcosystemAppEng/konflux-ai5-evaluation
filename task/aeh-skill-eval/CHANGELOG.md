@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+### AEH-only runtime cleanup (0.7.0)
+
+- Split task utilities, Cisco scanning, SKILL.md scanning, AEH orchestration,
+  and trial execution into separately selectable images. `aeh-image` selects
+  the trial image; new step-image parameters select the other four purposes.
+- Use AEH report rendering directly and remove the classic Harbor analysis,
+  MCPChecker report, scaffold generation, and image-promotion branches.
+- Remove runtime OTLP dependency installation; dependencies are baked into
+  the task image. Read kubeconfig namespaces with the Kubernetes Python client.
+- Remove the unused `workload-credentials-secret` task input,
+  `security_scan_use_llm` metadata field, and unused
+  metadata-derived scan flags; enforce the baked harness-eval version.
+- Published test images in the original `agent-eval-harness` repository with
+  prefix `v3.0-test-20261019-021235` and five purpose suffixes; bundle `0.7.0`
+  pins every image digest. Updated both agentic-plugins pipeline bundle pins.
+
+### Changed
+
+- Pass the selected eval configuration into report aggregation so integer
+  scores on declared numeric ranges are normalized correctly.
+- Update the AEH image to `agent-eval-harness:v2.3`; its pinned config loader
+  no longer emits a numeric score-range warning for the categorical A/B/tie
+  pairwise judge, while retaining the warning for numeric judges.
+- Bump the task bundle version to `0.6.3`.
+- Added an OCI report persistence stage before the existing Postgres/MinIO
+  store. It packages the same object paths published to MinIO and attaches
+  the archive to the caller's built image digest with ORAS. The push pipeline
+  now waits for the image build and passes its URL and digest to each matrix
+  leg; persistence-disabled callers skip the attachment. The archive is
+  passed to ORAS by a relative filename to satisfy ORAS path validation.
+- Bumped the task bundle version to `0.6.1`.
+- Fixed the ORAS attach step to define its archive directory and filename in
+  its own step scope; Tekton steps do not share shell variables.
+- Bumped the task bundle version to `0.6.2`.
+- Simplified the per-skill task flow: renamed the trusted-artifact copy step
+  to `materialize-source`, merged symlink resolution into that preparation
+  step, and combined Tier A/Tier B result serialization into one final
+  `emit-results` step while preserving both result fields and their distinct
+  gate semantics.
+- Moved metrics-checkpoint writing into `quality-review`; the checkpoint
+  remains available to `store` for Postgres observability metrics.
+- Removed the optional AEH harness-inventory scan and its unused output.
+- Updated the task to use `agent-eval-harness:v2.2`.
+
+### Fixed
+
+- `validate` step no longer crashes with `FileNotFoundError` on
+  `metadata.yaml` for a changed-and-opted-in skill that never committed an
+  AEH submission at all (no `submissions/<pack>/<skill>/` directory --
+  true for most skills in the catalog, e.g. plain `rh-basic` skills with
+  no `eval.yaml`/`cases`/mock-mcps). Previously, `validate`'s
+  `EFFECTIVE_AEH_MODE`/`EFFECTIVE_AEH_CONTROL_CONFIG`/
+  `EFFECTIVE_AEH_TREATMENT_CONFIG` preamble opened
+  `$SUBMISSION_PATH/metadata.yaml` directly, before ever calling
+  `scripts/validate.py` (which already handles a missing `metadata.yaml`
+  gracefully) -- so any such skill crashed as soon as it was both changed
+  and opted into evaluation (`should-evaluate=true` + `is-changed=true`),
+  surfacing only as `FileNotFoundError: ... /submissions/<pack>/<skill>/
+  metadata.yaml` with no actionable message. `validate` now checks for
+  `metadata.yaml` first and, when absent, writes a new per-leg
+  `has-aeh-submission=false` flag and exits 0 cleanly instead -- treated
+  identically to an unmet `should-evaluate`/`is-changed` gate. Every other
+  Tier B step (`quality-review`, `aeh-eval-check`,
+  `write-metrics-checkpoint`, `run-eval`, `emit-tier-b`) now also checks
+  this flag before touching any of `validate`'s per-leg baked vars, so
+  none of them error out trying to read files `validate` never wrote.
+  `analyze-and-scorecard`/`store` are unaffected -- they already degrade
+  to a Tier-A-only scorecard when no AEH submission/report exists for a
+  leg.
+
 ### Fixed
 
 - `run-eval` step now sets `AEH_INSECURE_SSL=1` (already used by

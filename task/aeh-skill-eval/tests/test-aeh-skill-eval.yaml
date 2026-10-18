@@ -4,7 +4,7 @@
 # use onError: continue with a cascading skip-guard, so the TaskRun itself
 # must still SUCCEED -- only the *content* of its two TEST_OUTPUT results
 # reflects the failure/skip. This test exercises exactly that contract:
-#   - TEST_OUTPUT_TIER_A must report "FAILURE" (clone-repo can't resolve
+#   - TEST_OUTPUT_TIER_A must report "FAILURE" (materialize-source can't resolve
 #     the bogus source-artifact, so security-scan/skillmd-scan cascade-skip).
 #   - TEST_OUTPUT_TIER_B must report "SKIPPED" (should-evaluate=false).
 apiVersion: tekton.dev/v1

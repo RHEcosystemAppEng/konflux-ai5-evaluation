@@ -4,15 +4,16 @@ Runs a single catalog item's full evaluation as one Task, so a Tekton
 `Matrix` can fan out over it natively -- one `TaskRun` per item in the
 Matrix source array.
 
-- **Tier A** (`clone-repo`/`security-scan`/`skillmd-scan`) always runs,
+- **Tier A** (`materialize-source`/`security-scan`/`skillmd-scan`) always runs,
   regardless of any opt-in flag -- a non-LLM security + `SKILL.md` quality
   scan over the real on-disk item.
-- **Tier B** (`validate`/`quality-review`/`aeh-eval-check`/
-  `write-metrics-checkpoint`/`run-eval`/`analyze-and-scorecard`/`store`),
-  the LLM-cost evaluation chain, only runs for a leg that is both changed
-  (per `changed-skills`) and opted in (`should-evaluate`) this run.
+- **Tier B** (`validate`/`quality-review`/`run-eval`) runs for a changed,
+  opted-in skill that has an AEH submission. Quality review is advisory.
+- **Persistence** (`analyze-and-scorecard`, OCI attachment, `store`) is
+  independently gated by `enable-persistence` and can persist Tier A-only
+  results when evaluation does not apply.
 
-This Task is already fully generic -- it needs only its own image, params,
+This Task is already fully generic -- it needs purpose-specific images, params,
 and Secrets, with no coupling to any particular source repository (unlike
 `check-pr-label`/`discover-changed-skills`/`update-registered-shas`, which
 are GitLab-project-specific). It consumes its caller's trusted Source
@@ -29,13 +30,38 @@ Emits two independent `TEST_OUTPUT` results so a caller can gate on Tier A
 (hard, always applicable) separately from Tier B (informational, "SKIPPED"
 when not applicable this run) -- see
 [aggregate-fanout-result](../aggregate-fanout-result/README.md) for
-aggregating these across every Matrix leg.
+aggregating these across every Matrix leg. One final `emit-results` step
+writes both result files.
 
 Safe for concurrent Matrix legs sharing one workspace: every step except
-the final `emit-tier-a`/`emit-tier-b` uses `onError: continue` plus a
-cascading skip-guard, so one leg's runtime failure never fails that leg's
-`TaskRun` (and so never disrupts sibling legs or downstream aggregator
-Tasks).
+the final `emit-results` uses `onError: continue` plus a cascading
+skip-guard, so one leg's runtime failure never fails that leg's `TaskRun`
+(and so never disrupts sibling legs or downstream aggregator Tasks).
+`quality-review` also writes the token metrics checkpoint consumed by
+`store`, avoiding a standalone bookkeeping step.
+
+When persistence is enabled and the caller supplies a built image URL and
+digest, `package-oci-reports` prepares the same report objects uploaded to
+MinIO and `attach-oci-reports` attaches them as an OCI artifact to that image
+digest before `store` writes to Postgres/MinIO. The OCI archive uses the
+`application/vnd.agentic-eval.reports.v1` artifact type. Persistence-disabled
+callers (including pull request builds) skip this upload.
+
+Each Matrix leg emits `skill-reports-ARTIFACT_OUTPUTS`, an object with
+`uri`, `digest`, and `skill` fields. When a report is attached, `uri` is the
+image repository and `digest` is the manifest digest printed by `oras attach`;
+combine them as `${uri}@${digest}` to pull the report archive:
+
+```sh
+oras pull --registry-config /path/to/auth.json -o ./report \
+  "${uri}@${digest}"
+```
+
+The object result uses Tekton Chains' `*ARTIFACT_OUTPUTS` type hint, allowing
+Chains to record the attached report artifact for the individual skill's
+TaskRun. The `skill` field identifies the Matrix leg. The result is emitted
+only when an archive was successfully attached; legs that skip attachment
+have no report artifact result.
 
 ## Parameters
 
@@ -44,33 +70,38 @@ Tasks).
 | submission-dir | Catalog item identifier in `submission_dir` form (e.g. `rh-sre/cve-impact`). The real on-disk pack directory is mechanically derived from this. | | true |
 | submission-revision | Commit SHA of the repo being evaluated. | | true |
 | source-artifact | The caller's own trusted Source Artifact for `submission-revision`, consumed via `use-trusted-artifact` since this Task's pod has no git credentials of its own. | | true |
+| image-url | Built component image repository to which this leg's OCI report artifact is attached. | `""` | false |
+| image-digest | Digest of the built component image to which this leg's OCI report artifact is attached. | `""` | false |
 | should-evaluate | Pipeline-wide (same value for every leg): `"true"` only when the Tier B (LLM) chain is opted in for this run. | `"false"` | false |
 | changed-skills | `array`. Full changed-skills array (same value for every leg, NOT a Matrix param); this leg's own `is-changed` flag is derived by membership check against this array. | `[]` | false |
-| enable-persistence | Independent of `should-evaluate`/`is-changed`: whether this leg should attempt `analyze-and-scorecard` (Compass Facts) and `store` (Postgres/MinIO) at all. | `"false"` | false |
+| enable-persistence | Independent of `should-evaluate`/`is-changed`: whether this leg should attempt `analyze-and-scorecard` (Compass Facts), OCI report attachment, and `store` (Postgres/MinIO). | `"false"` | false |
 | harness-eval-version | Pinned `harness-eval` version for deterministic `SKILL.md` scanning. | `"7.9.0"` | false |
 | llm-api-key | API key for the LLM used by `quality-review`/`run-eval`. | `"sk-dummy"` | false |
 | llm-api-base | Base URL of the LLM API. | `""` | false |
 | llm-model | LLM model name for `quality-review`. | `"gemini-2.5-flash"` | false |
 | aeh-mode | AEH evaluation mode: `single` or `pairwise`. | `"single"` | false |
-| aeh-image | Container image AEH uses for the evaluation workload. | `"quay.io/ecosystem-appeng/agent-eval-harness:v1.2.1"` | false |
+| task-image | Source preparation, validation, review, reporting, persistence, and result steps. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-task@sha256:569cdd8432aaaafef52f5bd7d9f0a05eab0ab618e37e1e35d7b828aa83d738be"` | false |
+| runner-image | AEH orchestration image for `run-eval`. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-runner@sha256:a08f7fbbfcd6209add56c946022697412809bbf43010e4536aef1d6a9f66d34c"` | false |
+| security-scan-image | Cisco deterministic scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-security-scan@sha256:cca56cd0f451bda9a2f1d047ad0f636b6d450a4b5b0f63a208d83b97598e9941"` | false |
+| skillmd-scan-image | Deterministic SKILL.md scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-skillmd-scan@sha256:5c35e22bfb5709941d93a88f1f0ecf4393779a9b77204be8ca26132d78311ad9"` | false |
+| aeh-image | Trial pod image containing Claude Code, the MCP mock server, and AEH's reward verifier. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-trial@sha256:4f2abcd472a19d76a052bdb48ed38a0f4abd175127a1b44af1bc30e6c1fa19da"` | false |
 | aeh-model-override | Explicit model override for `run-eval` (auto-derived from the item's own eval config when empty). | `""` | false |
 | aeh-judge-model-override | Explicit judge-model override for `run-eval`. | `""` | false |
-| aeh-runner | AEH runner backend (e.g. `harbor`). | `"harbor"` | false |
+| aeh-runner | AEH runner backend (`harbor`). | `"harbor"` | false |
 | aeh-control-config | Filename (within the submission) of the control eval config. | `"eval-control.yaml"` | false |
 | aeh-treatment-config | Filename (within the submission) of the treatment eval config. | `"eval-treatment.yaml"` | false |
 | aeh-kubeconfig-secret | Name of an optional Secret holding a kubeconfig for a remote evaluation cluster. | `"agentic-plugins-konflux-sa-kubeconfig"` | false |
 | workload-namespace | Kubernetes namespace on the (remote or in-cluster) evaluation cluster to run the workload in. | `"agentic-plugins-evaluation"` | false |
-| workload-credentials-secret | Name of a Secret the harness runner provisions for the evaluation workload (consumed indirectly by the harness image itself, not by this Task's own script -- see Secrets below). | `"workload-cluster-credentials"` | false |
-| enable-aeh-eval-check | When `"true"`, runs the advisory AEH harness-inventory scan (no gate consumes its output). | `"false"` | false |
 | otel-exporter-endpoint | Optional OTLP gRPC endpoint for tracing (Tier B chain only); inert when empty. | `""` | false |
-| mock-mcp-binary | Path to the generic mock-MCP-server entrypoint baked into this Task's image, used by the `swap-mock-mcp` step for per-skill fixture-backed MCP mocking. | `"/opt/mock-mcp/src/server.py"` | false |
+| mock-mcp-binary | Path to the generic mock-MCP-server entrypoint baked into the trial image, used by the `swap-mock-mcp` step for per-skill fixture-backed MCP mocking. | `"/opt/mock-mcp/src/server.py"` | false |
 
 ## Results
 
 | name | description |
 |---|---|
-| TEST_OUTPUT_TIER_A | Standardized Konflux test output derived only from `clone-repo`/`security-scan`/`skillmd-scan` -- the hard gate. |
+| TEST_OUTPUT_TIER_A | Standardized Konflux test output derived only from `materialize-source`/`security-scan`/`skillmd-scan` -- the hard gate. |
 | TEST_OUTPUT_TIER_B | Standardized Konflux test output derived from the Tier B (LLM) chain when it actually ran this leg; `{"result": "SKIPPED", ...}` otherwise. |
+| skill-reports-ARTIFACT_OUTPUTS | Per-skill OCI report artifact object (`uri`, `digest`, `skill`), type-hinted for automatic Tekton Chains collection. |
 
 ## Workspaces
 
@@ -90,12 +121,27 @@ Tasks).
 
 No ConfigMaps are used by this Task.
 
-## Usage
+## Image release and usage
+
+Version `0.7.0` is published with the five test images listed in the parameter
+table. They share `quay.io/ecosystem-appeng/agent-eval-harness`, using the
+`v3.0-test-20261019-021235` prefix and one purpose suffix per image. Each
+reference is pinned to its verified registry digest. Callers overriding
+`AEH_IMAGE` must select the `-trial` image. Remove the obsolete
+`workload-credentials-secret` task argument when upgrading; the runtime
+continues to use the target cluster's `llm-credentials` secret.
+
+The existing Konflux trusted-artifact and ORAS steps use their own images.
+Runtime steps do not install Python dependencies. `aeh-image` is the trial
+image; `runner-image` is the image executing the orchestration step.
+
+The example below resolves the published `0.7.0` bundle by digest.
 
 ```yaml
 - name: evaluate-skill
   runAfter:
   - discover-changed-skills
+  - build-image-index
   matrix:
     params:
     - name: submission-dir
@@ -106,7 +152,7 @@ No ConfigMaps are used by this Task.
     - name: name
       value: aeh-skill-eval
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.2.0@sha256:67dd9be7e223322b1101810fdcbc4020f469ffaf95ec4323507f3de76718d90b"
+      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.7.0@sha256:1cfbd5ba59ba9cd8857e730943a0578bc8bcc4938cbde301abf5d77ca0eaccda
     - name: kind
       value: task
   params:
@@ -114,6 +160,10 @@ No ConfigMaps are used by this Task.
     value: $(params.revision)
   - name: source-artifact
     value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
+  - name: image-url
+    value: $(tasks.build-image-index.results.IMAGE_URL)
+  - name: image-digest
+    value: $(tasks.build-image-index.results.IMAGE_DIGEST)
   - name: should-evaluate
     value: $(tasks.check-pr-label.results.should-evaluate)
   - name: changed-skills

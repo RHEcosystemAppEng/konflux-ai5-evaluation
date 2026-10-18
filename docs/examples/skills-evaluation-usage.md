@@ -55,9 +55,13 @@ explicit values to point at your own repository instead.
 
 ## 2. Fan out the evaluation
 
+This example uses the published `0.7.0` bundle, pinned to its registry digest.
+The bundle selects five purpose-specific images from the original
+`agent-eval-harness` repository. See the [image parameters](../../task/aeh-skill-eval/README.md#image-release-and-usage).
+
 ```yaml
 - name: evaluate-skill
-  runAfter: [discover-changed-skills]
+  runAfter: [discover-changed-skills, build-image-index]
   matrix:
     params:
     - name: submission-dir
@@ -66,11 +70,13 @@ explicit values to point at your own repository instead.
     resolver: bundles
     params:
     - {name: name, value: aeh-skill-eval}
-    - {name: bundle, value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.2.0@sha256:67dd9be7e223322b1101810fdcbc4020f469ffaf95ec4323507f3de76718d90b"}
+    - {name: bundle, value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.7.0@sha256:1cfbd5ba59ba9cd8857e730943a0578bc8bcc4938cbde301abf5d77ca0eaccda"}
     - {name: kind, value: task}
   params:
   - {name: submission-revision, value: "$(params.revision)"}
   - {name: source-artifact, value: "$(tasks.clone-repository.results.SOURCE_ARTIFACT)"}
+  - {name: image-url, value: "$(tasks.build-image-index.results.IMAGE_URL)"}
+  - {name: image-digest, value: "$(tasks.build-image-index.results.IMAGE_DIGEST)"}
   - {name: should-evaluate, value: "$(tasks.check-pr-label.results.should-evaluate)"}
   - {name: changed-skills, value: $(tasks.discover-changed-skills.results.changed-skills[*])}
   - {name: enable-persistence, value: "true"}
