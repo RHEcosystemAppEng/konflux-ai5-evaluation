@@ -82,7 +82,7 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: "0.7.0"
+    app.kubernetes.io/version: "0.8.0"
 spec:
   description: >-
     Runs a single skill's full evaluation as one Task, so Matrix can fan
@@ -176,23 +176,23 @@ spec:
       default: "single"
     - name: task-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-task@sha256:569cdd8432aaaafef52f5bd7d9f0a05eab0ab618e37e1e35d7b828aa83d738be"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-task@sha256:f94faf30857634ef9307bf43b5c355fbb286c228747e438366cb60c168e49df5"
       description: Preparation, validation, review, reporting and persistence.
     - name: runner-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-runner@sha256:a08f7fbbfcd6209add56c946022697412809bbf43010e4536aef1d6a9f66d34c"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-runner@sha256:5fb940342c3c56cd25b5e80ae9684e4ad383bd62bb268083fa3840818a1ef76e"
       description: AEH orchestration for run-eval.
     - name: security-scan-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-security-scan@sha256:cca56cd0f451bda9a2f1d047ad0f636b6d450a4b5b0f63a208d83b97598e9941"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-security-scan@sha256:cca56cd0f451bda9a2f1d047ad0f636b6d450a4b5b0f63a208d83b97598e9941"
       description: Cisco deterministic security scan.
     - name: skillmd-scan-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-skillmd-scan@sha256:5c35e22bfb5709941d93a88f1f0ecf4393779a9b77204be8ca26132d78311ad9"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-skillmd-scan@sha256:5c35e22bfb5709941d93a88f1f0ecf4393779a9b77204be8ca26132d78311ad9"
       description: Deterministic SKILL.md security and quality scan.
     - name: aeh-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-trial@sha256:4f2abcd472a19d76a052bdb48ed38a0f4abd175127a1b44af1bc30e6c1fa19da"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-trial@sha256:c8fdca4740c811ea4e4d3dcd411c4d98161374934799df5a0370e06a4635e0b1"
     - name: aeh-model-override
       type: string
       default: ""

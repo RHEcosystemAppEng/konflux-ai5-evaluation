@@ -80,11 +80,11 @@ have no report artifact result.
 | llm-api-base | Base URL of the LLM API. | `""` | false |
 | llm-model | LLM model name for `quality-review`. | `"gemini-2.5-flash"` | false |
 | aeh-mode | AEH evaluation mode: `single` or `pairwise`. | `"single"` | false |
-| task-image | Source preparation, validation, review, reporting, persistence, and result steps. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-task@sha256:569cdd8432aaaafef52f5bd7d9f0a05eab0ab618e37e1e35d7b828aa83d738be"` | false |
-| runner-image | AEH orchestration image for `run-eval`. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-runner@sha256:a08f7fbbfcd6209add56c946022697412809bbf43010e4536aef1d6a9f66d34c"` | false |
-| security-scan-image | Cisco deterministic scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-security-scan@sha256:cca56cd0f451bda9a2f1d047ad0f636b6d450a4b5b0f63a208d83b97598e9941"` | false |
-| skillmd-scan-image | Deterministic SKILL.md scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-skillmd-scan@sha256:5c35e22bfb5709941d93a88f1f0ecf4393779a9b77204be8ca26132d78311ad9"` | false |
-| aeh-image | Trial pod image containing Claude Code, the MCP mock server, and AEH's reward verifier. | `"quay.io/ecosystem-appeng/agent-eval-harness:v3.0-test-20261019-021235-trial@sha256:4f2abcd472a19d76a052bdb48ed38a0f4abd175127a1b44af1bc30e6c1fa19da"` | false |
+| task-image | Source preparation, validation, review, reporting, persistence, and result steps. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-task@sha256:f94faf30857634ef9307bf43b5c355fbb286c228747e438366cb60c168e49df5"` | false |
+| runner-image | AEH orchestration image for `run-eval`. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-runner@sha256:5fb940342c3c56cd25b5e80ae9684e4ad383bd62bb268083fa3840818a1ef76e"` | false |
+| security-scan-image | Cisco deterministic scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-security-scan@sha256:cca56cd0f451bda9a2f1d047ad0f636b6d450a4b5b0f63a208d83b97598e9941"` | false |
+| skillmd-scan-image | Deterministic SKILL.md scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-skillmd-scan@sha256:5c35e22bfb5709941d93a88f1f0ecf4393779a9b77204be8ca26132d78311ad9"` | false |
+| aeh-image | Trial pod image containing Claude Code, the MCP mock server, and AEH's reward verifier. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-trial@sha256:c8fdca4740c811ea4e4d3dcd411c4d98161374934799df5a0370e06a4635e0b1"` | false |
 | aeh-model-override | Explicit model override for `run-eval` (auto-derived from the item's own eval config when empty). | `""` | false |
 | aeh-judge-model-override | Explicit judge-model override for `run-eval`. | `""` | false |
 | aeh-runner | AEH runner backend (`harbor`). | `"harbor"` | false |
@@ -123,10 +123,10 @@ No ConfigMaps are used by this Task.
 
 ## Image release and usage
 
-Version `0.7.0` is published with the five test images listed in the parameter
+Version `0.8.0` is published with the five runtime images listed in the parameter
 table. They share `quay.io/ecosystem-appeng/agent-eval-harness`, using the
-`v3.0-test-20261019-021235` prefix and one purpose suffix per image. Each
-reference is pinned to its verified registry digest. Callers overriding
+`v4.0` prefix and one purpose suffix per image. Each reference is pinned to its
+verified registry digest. Callers overriding
 `AEH_IMAGE` must select the `-trial` image. Remove the obsolete
 `workload-credentials-secret` task argument when upgrading; the runtime
 continues to use the target cluster's `llm-credentials` secret.
@@ -135,7 +135,7 @@ The existing Konflux trusted-artifact and ORAS steps use their own images.
 Runtime steps do not install Python dependencies. `aeh-image` is the trial
 image; `runner-image` is the image executing the orchestration step.
 
-The example below resolves the published `0.7.0` bundle by digest.
+The example below resolves the published `0.8.0` bundle by digest.
 
 ```yaml
 - name: evaluate-skill
@@ -152,7 +152,7 @@ The example below resolves the published `0.7.0` bundle by digest.
     - name: name
       value: aeh-skill-eval
     - name: bundle
-      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.7.0@sha256:1cfbd5ba59ba9cd8857e730943a0578bc8bcc4938cbde301abf5d77ca0eaccda
+      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.8.0@sha256:dd277dcf8c376f3ead7c860a1afe12d74d8eabe906eb64d184d872dc85373b12
     - name: kind
       value: task
   params:

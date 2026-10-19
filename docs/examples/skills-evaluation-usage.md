@@ -55,7 +55,7 @@ explicit values to point at your own repository instead.
 
 ## 2. Fan out the evaluation
 
-This example uses the published `0.7.0` bundle, pinned to its registry digest.
+This example uses the published `0.8.0` bundle, pinned to its registry digest.
 The bundle selects five purpose-specific images from the original
 `agent-eval-harness` repository. See the [image parameters](../../task/aeh-skill-eval/README.md#image-release-and-usage).
 
@@ -70,7 +70,7 @@ The bundle selects five purpose-specific images from the original
     resolver: bundles
     params:
     - {name: name, value: aeh-skill-eval}
-    - {name: bundle, value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.7.0@sha256:1cfbd5ba59ba9cd8857e730943a0578bc8bcc4938cbde301abf5d77ca0eaccda"}
+    - {name: bundle, value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.8.0@sha256:dd277dcf8c376f3ead7c860a1afe12d74d8eabe906eb64d184d872dc85373b12"}
     - {name: kind, value: task}
   params:
   - {name: submission-revision, value: "$(params.revision)"}

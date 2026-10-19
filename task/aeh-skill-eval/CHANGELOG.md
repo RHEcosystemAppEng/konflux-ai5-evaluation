@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### AEH runtime image refresh (0.8.0)
+
+- Build and publish the five AEH runtime images as `v4.0` purpose-specific
+  tags, and pin the Task defaults to their registry digests.
+- Republish the `aeh-skill-eval` bundle as `0.8.0` with the refreshed images.
+
 ### AEH-only runtime cleanup (0.7.0)
 
 - Split task utilities, Cisco scanning, SKILL.md scanning, AEH orchestration,
