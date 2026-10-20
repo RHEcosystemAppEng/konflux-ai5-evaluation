@@ -82,7 +82,7 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: "0.8.0"
+    app.kubernetes.io/version: "0.8.1"
 spec:
   description: >-
     Runs a single skill's full evaluation as one Task, so Matrix can fan
@@ -184,7 +184,7 @@ spec:
       description: AEH orchestration for run-eval.
     - name: security-scan-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-security-scan@sha256:cca56cd0f451bda9a2f1d047ad0f636b6d450a4b5b0f63a208d83b97598e9941"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0.1-security-scan@sha256:98d0d70e69f5a8d812c9730adaf8ce9a8b1018b4c17b1f0ac027d90718d14b09"
       description: Cisco deterministic security scan.
     - name: skillmd-scan-image
       type: string

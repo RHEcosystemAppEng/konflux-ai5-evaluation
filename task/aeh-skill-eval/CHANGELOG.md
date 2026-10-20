@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Cisco allowed-tools compatibility (0.8.1)
+
+- Use the patched Cisco scanner image so space-separated `allowed-tools`
+  declarations follow the Agent Skills specification without false Bash HIGHs.
+- Preserve comma-separated declarations, YAML lists, and scoped tool arguments;
+  verify during image builds that undeclared Bash still fails the HIGH gate.
+- Republish the `aeh-skill-eval` bundle as `0.8.1`.
+
 ### AEH runtime image refresh (0.8.0)
 
 - Build and publish the five AEH runtime images as `v4.0` purpose-specific
