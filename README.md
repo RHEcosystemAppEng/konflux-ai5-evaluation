@@ -15,7 +15,7 @@ to.
 
 | Task | Purpose | Version |
 |---|---|---|
-| [aeh-skill-eval](task/aeh-skill-eval/README.md) | Per-item security/quality (Tier A) + opt-in LLM (Tier B) evaluation, designed to be `Matrix`-fanned-out over a catalog. | 0.8.1 |
+| [aeh-skill-eval](task/aeh-skill-eval/README.md) | Per-item security/quality (Tier A) + opt-in LLM (Tier B) evaluation, designed to be `Matrix`-fanned-out over a catalog. | 0.9.0 |
 | [aggregate-fanout-result](task/aggregate-fanout-result/README.md) | Aggregates a `Matrix`'s per-item `TEST_OUTPUT`s into one standardized, optionally hard-gating result. | 0.1.0 |
 | [check-pr-label](task/check-pr-label/README.md) | Fail-closed check of whether the merged MR for a commit carries an opt-in label (GitLab). | 0.1.0 |
 | [discover-changed-skills](task/discover-changed-skills/README.md) | Diffs a catalog's registered SHAs against the current SHA to find what changed (GitLab). | 0.1.0 |
@@ -57,12 +57,11 @@ target), to:
 quay.io/ecosystem-appeng/konflux-skill-evaluation/<task-name>:<version>
 ```
 
-The `aeh-skill-eval` bundle is published as `0.8.1`; the other four bundles
-remain `0.1.0`. Its five runtime images share the original
-`quay.io/ecosystem-appeng/agent-eval-harness` repository with the test prefix
-`v4.0` and purpose-specific tags, with the patched Cisco scanner at
-`v4.0.1-security-scan`. Image and bundle
-references are digest-pinned. See the evaluation task's
+The `aeh-skill-eval` bundle is published as `0.9.0`; the other four bundles
+use `0.1.0`. Runtime images share
+`quay.io/ecosystem-appeng/agent-eval-harness` with purpose-specific tags:
+`v4.0.2-task`, `v4.0.1-security-scan`, and `v4.0` for the runner, trial, and
+SKILL.md scanner. Image and bundle references are digest-pinned. See the
 [image parameters and published usage](task/aeh-skill-eval/README.md#image-release-and-usage).
 
 ## Repository layout

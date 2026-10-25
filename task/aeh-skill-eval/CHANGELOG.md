@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Skill structure validation and Compass fact (0.9.0)
+
+- Validate skill structure on every Tier A run; errors fail Tier A and warnings
+  stay advisory.
+- Supply `valid_skill_structure` certification from the skill validation report
+  and publish the standalone
+  `<fact_ref_prefix>valid-skill-structure` Compass fact with diagnostics.
+- Include the skill structure report in MinIO and OCI report artifacts.
+- Pin the task utilities image to the `v4.0.2-task` release and publish bundle
+  `0.9.0`.
+
 ### Cisco allowed-tools compatibility (0.8.1)
 
 - Use the patched Cisco scanner image so space-separated `allowed-tools`

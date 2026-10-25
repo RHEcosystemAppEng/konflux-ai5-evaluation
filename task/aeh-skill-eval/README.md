@@ -4,9 +4,12 @@ Runs a single catalog item's full evaluation as one Task, so a Tekton
 `Matrix` can fan out over it natively -- one `TaskRun` per item in the
 Matrix source array.
 
-- **Tier A** (`materialize-source`/`security-scan`/`skillmd-scan`) always runs,
-  regardless of any opt-in flag -- a non-LLM security + `SKILL.md` quality
-  scan over the real on-disk item.
+- **Tier A** (`materialize-source`/`skill-structure-validation`/`security-scan`/`skillmd-scan`)
+  always runs, regardless of any opt-in flag -- non-LLM structure, security,
+  and `SKILL.md` quality checks over the skill directory. Structure validation
+  errors fail Tier A; warnings remain advisory. `skill-structure-validation.json`
+  supplies certification and the standalone `valid-skill-structure` Compass
+  fact, including errors and warnings.
 - **Tier B** (`validate`/`quality-review`/`run-eval`) runs for a changed,
   opted-in skill that has an AEH submission. Quality review is advisory.
 - **Persistence** (`analyze-and-scorecard`, OCI attachment, `store`) is
@@ -80,7 +83,7 @@ have no report artifact result.
 | llm-api-base | Base URL of the LLM API. | `""` | false |
 | llm-model | LLM model name for `quality-review`. | `"gemini-2.5-flash"` | false |
 | aeh-mode | AEH evaluation mode: `single` or `pairwise`. | `"single"` | false |
-| task-image | Source preparation, validation, review, reporting, persistence, and result steps. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-task@sha256:f94faf30857634ef9307bf43b5c355fbb286c228747e438366cb60c168e49df5"` | false |
+| task-image | Source preparation, validation, review, reporting, persistence, and result steps. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0.2-task@sha256:d9efe91218c9b615657788c5fadbfb93340ccd51d19ce63a753a81715e84cafa"` | false |
 | runner-image | AEH orchestration image for `run-eval`. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-runner@sha256:5fb940342c3c56cd25b5e80ae9684e4ad383bd62bb268083fa3840818a1ef76e"` | false |
 | security-scan-image | Cisco deterministic scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0.1-security-scan@sha256:98d0d70e69f5a8d812c9730adaf8ce9a8b1018b4c17b1f0ac027d90718d14b09"` | false |
 | skillmd-scan-image | Deterministic SKILL.md scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-skillmd-scan@sha256:5c35e22bfb5709941d93a88f1f0ecf4393779a9b77204be8ca26132d78311ad9"` | false |
@@ -99,7 +102,7 @@ have no report artifact result.
 
 | name | description |
 |---|---|
-| TEST_OUTPUT_TIER_A | Standardized Konflux test output derived only from `materialize-source`/`security-scan`/`skillmd-scan` -- the hard gate. |
+| TEST_OUTPUT_TIER_A | Standardized Konflux test output derived only from `materialize-source`/`skill-structure-validation`/`security-scan`/`skillmd-scan` -- the hard gate. |
 | TEST_OUTPUT_TIER_B | Standardized Konflux test output derived from the Tier B (LLM) chain when it actually ran this leg; `{"result": "SKIPPED", ...}` otherwise. |
 | skill-reports-ARTIFACT_OUTPUTS | Per-skill OCI report artifact object (`uri`, `digest`, `skill`), type-hinted for automatic Tekton Chains collection. |
 
@@ -123,21 +126,17 @@ No ConfigMaps are used by this Task.
 
 ## Image release and usage
 
-Version `0.8.1` is published with the five runtime images listed in the parameter
-table. They share `quay.io/ecosystem-appeng/agent-eval-harness`, using the
-`v4.0` prefix and one purpose suffix per image, except for the patched Cisco
-scanner, which uses `v4.0.1-security-scan`. Each reference is pinned to its
-verified registry digest. The scanner accepts space-separated `allowed-tools`
-without changing the HIGH severity gate. Callers overriding
-`AEH_IMAGE` must select the `-trial` image. Remove the obsolete
-`workload-credentials-secret` task argument when upgrading; the runtime
-continues to use the target cluster's `llm-credentials` secret.
+Version `0.9.0` uses the digest-pinned runtime images listed in the parameter
+table: `v4.0.2-task`, `v4.0.1-security-scan`, and `v4.0` for the runner, trial,
+and SKILL.md scanner. Callers overriding `AEH_IMAGE` must select the `-trial`
+image. Workload credentials come from the target cluster's `llm-credentials`
+secret.
 
 The existing Konflux trusted-artifact and ORAS steps use their own images.
 Runtime steps do not install Python dependencies. `aeh-image` is the trial
 image; `runner-image` is the image executing the orchestration step.
 
-The example below resolves the published `0.8.1` bundle by digest.
+The example below resolves the published `0.9.0` bundle by digest.
 
 ```yaml
 - name: evaluate-skill
@@ -154,7 +153,7 @@ The example below resolves the published `0.8.1` bundle by digest.
     - name: name
       value: aeh-skill-eval
     - name: bundle
-      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.8.1@sha256:aaf5d06843a90c93be5a9bce79526540b9083d4315905ae1dcf3a2c123e3bea5
+      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.9.0@sha256:12740149e61adf2008a7d346839d3fc50bf534625925008fb92066b19540af60
     - name: kind
       value: task
   params:

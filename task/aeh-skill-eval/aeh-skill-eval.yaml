@@ -1,6 +1,7 @@
 # Runs a single skill's full evaluation as one Task, so a Matrix can fan
 # out over it natively (one TaskRun per skill in the Matrix source array).
-# materialize-source/security-scan/skillmd-scan ("Tier A") always run; the Tier B
+# materialize-source/skill-structure-validation/security-scan/skillmd-scan
+# ("Tier A") always run; the Tier B
 # (LLM) chain (validate, quality-review, run-eval, analyze-and-scorecard, store) only
 # runs for a leg that is both changed and opted in this run.
 #
@@ -29,7 +30,7 @@
 #     comment).
 #
 # TWO SEPARATE RESULTS:
-#   - TEST_OUTPUT_TIER_A: derived only from materialize-source/security-scan/
+#   - TEST_OUTPUT_TIER_A: derived only from materialize-source/skill-structure-validation/security-scan/
 #     skillmd-scan (see emit-results). This is the pipeline-level hard gate.
 #   - TEST_OUTPUT_TIER_B: derived from the Tier B chain when it actually ran
 #     this leg (see emit-results); `{"result": "SKIPPED", ...}` otherwise --
@@ -82,12 +83,12 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: "0.8.1"
+    app.kubernetes.io/version: "0.9.0"
 spec:
   description: >-
     Runs a single skill's full evaluation as one Task, so Matrix can fan
     out over it natively -- one TaskRun per skill in the Matrix source
-    array. materialize-source/security-scan/skillmd-scan always run; the Tier B
+    array. materialize-source/skill-structure-validation/security-scan/skillmd-scan always run; the Tier B
     (LLM) chain (validate/quality-review/run-eval/analyze-and-scorecard/store) only
     runs when should-evaluate AND this leg's own is-changed flag are both
     true. Emits two independent TEST_OUTPUT results -- TEST_OUTPUT_TIER_A
@@ -176,7 +177,7 @@ spec:
       default: "single"
     - name: task-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-task@sha256:f94faf30857634ef9307bf43b5c355fbb286c228747e438366cb60c168e49df5"
+      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0.2-task@sha256:d9efe91218c9b615657788c5fadbfb93340ccd51d19ce63a753a81715e84cafa"
       description: Preparation, validation, review, reporting and persistence.
     - name: runner-image
       type: string
@@ -243,7 +244,7 @@ spec:
     - name: TEST_OUTPUT_TIER_A
       description: >-
         Standardized Konflux test output derived only from materialize-source/
-        security-scan/skillmd-scan -- the pipeline's hard gate.
+        skill-structure-validation/security-scan/skillmd-scan -- the pipeline's hard gate.
     - name: TEST_OUTPUT_TIER_B
       description: >-
         Standardized Konflux test output derived from the Tier B (LLM)
@@ -646,6 +647,36 @@ spec:
         echo "Validation PASSED"
         echo "Submission: $SUBMISSION_NAME"
         echo "Report prefix: $(cat "$VARS_DIR/report-prefix")"
+
+    # Tier A structure validation: validates the real skill independently of
+    # the optional AEH submission. A failed check still writes its report so
+    # analyze-and-scorecard can publish the failure to Compass.
+    - name: skill-structure-validation
+      image: $(params.task-image)
+      onError: continue
+      env:
+        - name: SUBMISSION_DIR
+          value: $(params.submission-dir)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
+          echo "Skipping: materialize-source failed earlier"
+          exit 0
+        fi
+        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
+        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
+        VARS_DIR="${LEG_DIR}/.baked-vars"
+        PACK="${SUBMISSION_DIR%/*}"
+        SKILL_NAME="${SUBMISSION_DIR##*/}"
+        SKILL_PATH="${LEG_DIR}/${PACK}/skills/${SKILL_NAME}"
+        REPORT_KEY=$(cat "${VARS_DIR}/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
+        REPORT_DIR="${LEG_DIR}/reports/${REPORT_KEY}"
+        PIPELINE_DIR="/opt/agent-eval-harness"
+        cd "$PIPELINE_DIR"
+        export PYTHONPATH="$PIPELINE_DIR"
+        python3 scripts/validate_skill_structure.py "$SKILL_PATH" \
+          --output "$REPORT_DIR/skill-structure-validation.json"
 
     # Tier A security scan: always runs regardless of should-evaluate/
     # is-changed, scanning the skill's real pack directory (skill-dir,
@@ -1217,7 +1248,7 @@ spec:
                 objects[f"{prefix}/{object_name}"] = (path, None)
 
         # Core and Tier A report objects from publish.py.
-        for name in ("report.json", "report.md", "scorecard.json", "certification.json"):
+        for name in ("report.json", "report.md", "scorecard.json", "certification.json", "skill-structure-validation.json"):
             add(report_dir / name, name)
         for name in ("security-scan.json", "security-scan.sarif", "skillmd-security-scan.json"):
             add(report_dir / name, f"security_scans/{name}")
@@ -1498,6 +1529,7 @@ spec:
         TIER_A_FAILED_EXIT=""
         for pair in \
           "materialize-source:$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" \
+          "skill-structure-validation:$(cat "$(steps.step-skill-structure-validation.exitCode.path)" 2>/dev/null || echo 0)" \
           "security-scan:$(cat "$(steps.step-security-scan.exitCode.path)" 2>/dev/null || echo 0)" \
           "skillmd-scan:$(cat "$(steps.step-skillmd-scan.exitCode.path)" 2>/dev/null || echo 0)"
         do
@@ -1522,7 +1554,7 @@ spec:
             note = f"{submission_dir}: step '{failed_step}' exited {failed_exit}"
         else:
             result = "SUCCESS"
-            note = f"{submission_dir}: materialize-source/security-scan/skillmd-scan all passed"
+            note = f"{submission_dir}: materialize-source/skill-structure-validation/security-scan/skillmd-scan all passed"
         successes, failures = (1, 0) if result == "SUCCESS" else (0, 1)
         payload = {
             "result": result,
