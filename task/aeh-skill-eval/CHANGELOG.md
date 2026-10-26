@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Pin default evaluation and trial images to the published `v1.0` CLI runtime digests.
 - Run evaluation, fixture staging, scoring, reporting, and persistence through
   one CLI invocation per Matrix leg, with explicit tiers and persistence inputs.
 - Use one complete evaluation image and a separate trial image for Tier 2;

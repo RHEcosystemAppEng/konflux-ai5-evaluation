@@ -69,3 +69,4 @@ spec:
     - name: evaluation-image
       type: string
       description: CLI-compatible runtime image.
+      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0-runner@sha256:c4b1f29e5eef8adab45e7d2c9d640af31f82d2b962179f3438a17d0d7065c781

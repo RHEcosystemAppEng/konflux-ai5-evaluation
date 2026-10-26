@@ -26,9 +26,10 @@ spec:
       type: string
     - name: evaluation-image
       type: string
+      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0-runner@sha256:c4b1f29e5eef8adab45e7d2c9d640af31f82d2b962179f3438a17d0d7065c781
     - name: trial-image
       type: string
-      default: ""
+      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0-trial@sha256:c497b4f57d17aa7cfba98a97a1b2d4eca330268a38270a99e39cb77ce71cb226
     - name: image-url
       type: string
       default: ""

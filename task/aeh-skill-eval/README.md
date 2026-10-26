@@ -36,9 +36,10 @@ review policy, config filenames, models, thresholds, fixtures, and Compass facts
 
 ## Runtime images
 
-`evaluation-image` contains the CLI, both scanners in isolated Python environments,
+`evaluation-image` contains the CLI with both scanners installed as dependencies,
 unchanged upstream AEH, Harbor/Kubernetes, and model/storage clients. `aeh-image`
-is required only for Tier 2 trial pods. These are the two project-owned images.
+is used only for Tier 2 trial pods. These are the two project-owned images;
+both default to verified `v1.0` registry digests and can be overridden by the calling pipeline.
 
 Evidence packaging, result conversion, and aggregation use the standard Red Hat
 Python image. OCI attachment reuses the existing digest-pinned Konflux task-runner
@@ -52,9 +53,9 @@ OCI client in the CLI. No packages are installed at TaskRun startup.
 | `submission-dir` | Required | Catalog skill identifier: <pack>/<skill>. |
 | `submission-revision` | Required | Evaluated source commit SHA. |
 | `source-artifact` | Required | Trusted source artifact for the evaluated revision. |
-| `evaluation-image` | Required | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
+| `evaluation-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0-runner@sha256:c4b1f29e5eef8adab45e7d2c9d640af31f82d2b962179f3438a17d0d7065c781` | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
 | `tiers` | 1 | Evaluation tiers passed directly to the CLI: 1, 2, or 1,2. |
-| `aeh-image` | Unset / disabled | Trial image pullable by the workload cluster; required for Tier 2. |
+| `aeh-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0-trial@sha256:c497b4f57d17aa7cfba98a97a1b2d4eca330268a38270a99e39cb77ce71cb226` | Trial image pullable by the workload cluster; used for Tier 2. |
 | `persist` | Unset / disabled | Optional evaluation persistence: postgres,s3,compass. OCI evidence attachment is controlled by image-url and image-digest. |
 | `persistence-required` | true | Treat selected publication failures as errors. |
 | `image-url` | Unset / disabled | Built component image repository for OCI report attachment. |
