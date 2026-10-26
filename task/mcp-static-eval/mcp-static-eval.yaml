@@ -1,0 +1,112 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: mcp-static-eval
+  labels:
+    app.kubernetes.io/name: abevalflow
+    app.kubernetes.io/component: konflux
+spec:
+  description: >-
+    MCP static evaluation - build-time analysis (ADR Approach 4).
+    Runs three language-agnostic static checks against the MCP server source,
+    before deployment and without running the server: secrets management
+    (gitleaks), no user-provided code execution (semgrep), and license
+    compliance (licensee). Always executes, independent of runtime outcomes;
+    resolves to pass/fail only. 
+  params:
+    - name: mcp-eval-image
+      type: string
+      default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
+      description: >-
+        MCP eval image with the scanners (gitleaks, semgrep, licensee) and the
+        pipeline code (scripts.mcp, abevalflow.mcp) baked in at PYTHONPATH=/opt.
+    - name: source-subdir
+      type: string
+      default: "."
+      description: >-
+        Path of the MCP server source within the workspace to scan
+        (relative to the workspace root). Defaults to the workspace root.
+    - name: mode
+      type: string
+      default: "block"
+      description: Gate enforcement mode - block, warn, or disabled.
+    - name: allowed-licenses
+      type: string
+      default: ""
+      description: >-
+        Space-separated approved SPDX ids overriding the built-in allow-list
+        (e.g. "apache-2.0 mit"). Empty uses DEFAULT_ALLOWED_LICENSES.
+  workspaces:
+    - name: source
+      description: Workspace containing the MCP server source to evaluate.
+  results:
+    - name: static-eval-passed
+      description: Whether all static evaluation gates passed (true/false).
+    - name: report-path
+      description: Workspace-relative path to the static evaluation reports directory.
+  steps:
+    - name: scan
+      image: $(params.mcp-eval-image)
+      imagePullPolicy: Always
+      # User-controlled params are bound to env vars (Tekton substitutes them as
+      # literal strings) instead of inlined into the script, so a value containing
+      # shell metacharacters cannot execute in the task pod.
+      env:
+        - name: SOURCE_SUBDIR
+          value: $(params.source-subdir)
+        - name: ALLOWED_LICENSES
+          value: $(params.allowed-licenses)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        SOURCE_DIR="$(workspaces.source.path)/$SOURCE_SUBDIR"
+        RESULTS_DIR="$(workspaces.source.path)/results"
+        mkdir -p "$RESULTS_DIR"
+
+        # licensee (Rugged/libgit2) refuses to open a repo whose directory is not
+        # owned by the current UID. The repo was cloned by the pipeline's
+        # fetch-mcp-repo task, which runs in a different pod/UID than this step,
+        # so that ownership check always trips here even though we only need
+        # read access. Mark the workspace as a trusted ("safe") directory the
+        # same way `git config --global --add safe.directory` would - written
+        # directly since this image has no git CLI, only libgit2 bindings.
+        export HOME="${HOME:-/tmp}"
+        mkdir -p "$HOME"
+        printf '[safe]\n\tdirectory = *\n' >> "$HOME/.gitconfig"
+
+        LICENSE_ARGS=""
+        # shellcheck disable=SC2086
+        for spdx in $ALLOWED_LICENSES; do
+          LICENSE_ARGS="$LICENSE_ARGS --allow $spdx"
+        done
+
+        echo "=== Static evaluation scanners on $SOURCE_DIR ==="
+        python -m scripts.mcp.scanners.static_eval_secrets_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
+        python -m scripts.mcp.scanners.static_eval_no_user_code_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
+        # shellcheck disable=SC2086
+        python -m scripts.mcp.scanners.static_eval_license_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR" $LICENSE_ARGS
+
+    - name: gate
+      image: $(params.mcp-eval-image)
+      imagePullPolicy: Always
+      env:
+        - name: MODE
+          value: $(params.mode)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        RESULTS_DIR="$(workspaces.source.path)/results"
+        REPORTS_DIR="$(workspaces.source.path)/reports"
+        mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
+
+        # Shared gate wrapper (baked in the image): runs the gate module, emits the
+        # Tekton results from the summary, and propagates the gate's exit code.
+        bash /opt/scripts/mcp/gate_wrapper.sh \
+          scripts.mcp.runners.static_eval_gate \
+          "$RESULTS_DIR" \
+          "$REPORTS_DIR" \
+          "$MODE" \
+          "$REPORTS_DIR/static-eval-summary.json" \
+          "$(results.static-eval-passed.path)" \
+          "reports/static-eval-summary.json" \
+          "$(results.report-path.path)"
