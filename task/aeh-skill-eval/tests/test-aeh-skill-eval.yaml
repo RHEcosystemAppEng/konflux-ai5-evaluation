@@ -1,12 +1,3 @@
-# source-artifact deliberately points at a nonexistent OCI artifact, and
-# should-evaluate is "false" with an empty changed-skills array. Unlike
-# discover-changed-skills/update-registered-shas, aeh-skill-eval's steps all
-# use onError: continue with a cascading skip-guard, so the TaskRun itself
-# must still SUCCEED -- only the *content* of its two TEST_OUTPUT results
-# reflects the failure/skip. This test exercises exactly that contract:
-#   - TEST_OUTPUT_TIER_A must report "FAILURE" (materialize-source can't resolve
-#     the bogus source-artifact, so security-scan/skillmd-scan cascade-skip).
-#   - TEST_OUTPUT_TIER_B must report "SKIPPED" (should-evaluate=false).
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -21,19 +12,18 @@ spec:
         name: aeh-skill-eval
       params:
         - name: submission-dir
-          value: "test/fixture-skill"
+          value: test/fixture-skill
         - name: submission-revision
-          value: "deadbeef"
+          value: deadbeef
         - name: source-artifact
-          value: "localhost:5000/nonexistent/artifact:latest"
-        - name: should-evaluate
-          value: "false"
-        - name: changed-skills
-          value: []
+          value: localhost:5000/nonexistent/artifact:latest
+        - name: evaluation-image
+          value: $(params.evaluation-image)
+        - name: tiers
+          value: '1'
       workspaces:
         - name: source
           workspace: tests-workspace
-
     - name: verify-result
       runAfter:
         - run-aeh-skill-eval
@@ -67,11 +57,15 @@ spec:
               tier_a = json.loads(os.environ['TIER_A_JSON'])
               tier_b = json.loads(os.environ['TIER_B_JSON'])
 
-              if tier_a.get('result') != 'FAILURE':
-                  print(f\"FAIL: expected TEST_OUTPUT_TIER_A result=FAILURE, got {tier_a.get('result')!r}\")
+              if tier_a.get('result') != 'ERROR':
+                  print(f\"FAIL: expected TEST_OUTPUT_TIER_A result=ERROR, got {tier_a.get('result')!r}\")
                   sys.exit(1)
               if tier_b.get('result') != 'SKIPPED':
                   print(f\"FAIL: expected TEST_OUTPUT_TIER_B result=SKIPPED, got {tier_b.get('result')!r}\")
                   sys.exit(1)
-              print('aeh-skill-eval correctly reported Tier A FAILURE / Tier B SKIPPED for an unresolvable source-artifact')
+              print('aeh-skill-eval correctly reported Tier A ERROR / Tier B SKIPPED for an unresolvable source-artifact')
               "
+  params:
+    - name: evaluation-image
+      type: string
+      description: CLI-compatible runtime image.

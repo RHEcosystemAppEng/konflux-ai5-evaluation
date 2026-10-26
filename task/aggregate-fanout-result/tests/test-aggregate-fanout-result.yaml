@@ -1,28 +1,41 @@
-# Expects the referenced Task to fail: SOURCE_ARTIFACT points at a
-# nonexistent OCI artifact, so use-trusted-artifact can never resolve it --
-# see test_tekton_tasks.sh's `test/assert-task-failure` convention.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
   name: test-aggregate-fanout-result
-  annotations:
-    test/assert-task-failure: run-aggregate-fanout-result
 spec:
   workspaces:
     - name: tests-workspace
-      description: The workspace provided by the test runner script (unused by this test).
+      description: Provided by the test runner; unused.
   tasks:
-    - name: run-aggregate-fanout-result
+    - name: aggregate
       taskRef:
         name: aggregate-fanout-result
       params:
-        - name: SOURCE_ARTIFACT
-          value: "localhost:5000/nonexistent/artifact:latest"
-        - name: should-evaluate
-          value: "true"
         - name: changed-skills
-          value: []
+          value:
+            - demo
         - name: eval-outcomes
-          value: []
+          value:
+            - '{"result":"SKIPPED"}'
         - name: fail-on-non-success
-          value: "false"
+          value: 'true'
+    - name: verify
+      params:
+        - name: outcome
+          value: $(tasks.aggregate.results.TEST_OUTPUT)
+      taskSpec:
+        params:
+          - name: outcome
+            type: string
+        steps:
+          - name: check
+            image: registry.access.redhat.com/ubi9/python-311:latest
+            env:
+              - name: OUTCOME
+                value: $(params.outcome)
+            script: |
+              #!/usr/bin/env python3
+              import json, os
+              result = json.loads(os.environ["OUTCOME"])
+              assert result["result"] == "SUCCESS"
+              assert result["successes"] == 0

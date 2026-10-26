@@ -9,13 +9,9 @@
 # pushed back to, neither of which maps onto the OCI-Trusted-Artifact
 # model without changing the Task's actual behavior.
 #
-# - task/aeh-skill-eval/aeh-skill-eval.yaml: `source` is a scratch PVC
-#   shared by every concurrent Matrix leg (one leg per catalog item, see
-#   the Task's own CONCURRENCY note); each leg computes its own
-#   `legs/<slug>` subdirectory under it. The Task already consumes its
-#   caller's actual trusted Source Artifact via the `source-artifact` param
-#   + `use-trusted-artifact` step -- the workspace itself carries no data
-#   between pipeline Tasks.
+# - task/aeh-skill-eval/aeh-skill-eval.yaml: `source` is scratch storage
+#   for independent CLI runs keyed by TaskRun name. The task consumes trusted
+#   input through source-artifact; the workspace stores evaluation evidence.
 # - task/discover-changed-skills/discover-changed-skills.yaml: `source` is
 #   where this Task performs its own authenticated, full-history
 #   `git clone` (needed to diff against an arbitrarily old registered SHA --

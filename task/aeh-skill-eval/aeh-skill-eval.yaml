@@ -1,81 +1,3 @@
-# Runs a single skill's full evaluation as one Task, so a Matrix can fan
-# out over it natively (one TaskRun per skill in the Matrix source array).
-# materialize-source/skill-structure-validation/security-scan/skillmd-scan
-# ("Tier A") always run; the Tier B
-# (LLM) chain (validate, quality-review, run-eval, analyze-and-scorecard, store) only
-# runs for a leg that is both changed and opted in this run.
-#
-# THREE INDEPENDENT GATING FLAGS:
-#   - should-evaluate (pipeline-wide) + this leg's own is-changed flag
-#     (derived by compute-flags below from the changed-skills array) gate
-#     the LLM-cost Tier B steps.
-#   - has-aeh-submission (this leg's own flag, written by validate -- the
-#     FIRST thing it checks, before touching should-evaluate/is-changed's
-#     own gated work): "true" only when
-#     submissions/<submission-dir>/metadata.yaml actually exists on disk.
-#     Most skills in the Compass catalog never commit an AEH submission at
-#     all (no eval.yaml/cases/mock-mcps -- just a plain SKILL.md), so a
-#     changed-and-opted-in leg for one of THOSE skills has nothing for AEH
-#     to evaluate. Every Tier B step below treats
-#     has-aeh-submission=false identically to should-evaluate=false/
-#     is-changed=false (clean exit 0, no-op) instead of crashing trying to
-#     open a metadata.yaml that was never meant to exist.
-#   - enable-persistence independently gates analyze-and-scorecard (Compass
-#     Facts) and store (Postgres/MinIO), regardless of should-evaluate/
-#     is-changed/has-aeh-submission -- these two steps cost no LLM tokens
-#     and can persist a skill's Tier A security/quality gate results even
-#     when no LLM evaluation ran this leg (including skills with no AEH
-#     submission at all -- aggregate_scorecard.py falls back to a
-#     Tier-A-only scorecard for those, see analyze-and-scorecard's own
-#     comment).
-#
-# TWO SEPARATE RESULTS:
-#   - TEST_OUTPUT_TIER_A: derived only from materialize-source/skill-structure-validation/security-scan/
-#     skillmd-scan (see emit-results). This is the pipeline-level hard gate.
-#   - TEST_OUTPUT_TIER_B: derived from the Tier B chain when it actually ran
-#     this leg (see emit-results); `{"result": "SKIPPED", ...}` otherwise --
-#     a "not applicable this run" sentinel, never a failure. Consumers
-#     filter this sentinel out before computing pass/fail counts (see
-#     scripts/aggregate_fanout_result.py).
-#
-# REPORT_KEY INVARIANT: security-scan, skillmd-scan, analyze-and-scorecard,
-# and store must all resolve the same reports/ subdirectory key: the real
-# AEH submission-name when `validate` produced one this leg, else
-# submission-dir. All four steps compute this identically
-# (`cat "$VARS_DIR/submission-name" 2>/dev/null || printf '%s' "$(params.submission-dir)"`)
-# -- changing the fallback in only one of them would make analyze-and-
-# scorecard look in the wrong directory for what security-scan/skillmd-scan
-# actually wrote.
-#
-# security-scan/skillmd-scan always run at one uniform strict bar
-# (`--fail-on-severity high`, LLM semantic review off) for every skill,
-# regardless of that skill's own metadata.yaml `security_scan` setting. metadata.yaml's separate
-# `gate_policy.security`/`gate_policy.quality` (how the scorecard SCORES
-# those findings) is unaffected -- only how the scan itself runs.
-#
-# WHY ONE TASK, NOT A NESTED PIPELINE: Tekton Matrix fanout over a Task is
-# stable on this cluster; fanout over a Pipeline is not, and Matrix cannot
-# correlate per-leg results across independently-matrixed chained
-# PipelineTasks (only whole-array aggregation is supported). So every
-# stage lives as sequential steps in one Task, with cross-step values
-# passed via `${LEG_DIR}/.baked-vars/` files instead of
-# `$(tasks.X.results.Y)`.
-#
-# CONCURRENCY: Matrix fans out multiple TaskRuns of this Task in parallel,
-# all sharing the same `source` workspace PVC. Every step computes its own
-# `LEG_DIR="$(workspaces.source.path)/legs/<slug of submission-dir>"` and
-# does all its work under that leg-private subdirectory.
-#
-# RUNTIME ERROR ISOLATION: every step except the final emit-results step
-# has `onError: continue` plus a cascading skip-guard (checks
-# earlier steps' exit codes; skips its own work with `exit 0` on an
-# earlier failure instead of also failing). This leg's TaskRun is never
-# marked Failed by Tekton, so one skill's runtime failure never disrupts
-# sibling legs or downstream aggregator tasks.
-#
-# TRUSTED SOURCE ARTIFACT: consumes the pipeline's own trusted Source
-# Artifact via use-trusted-artifact + materialize-source below, not a fresh `git
-# clone` -- this Task's pod has no git credentials of its own.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -83,1608 +5,469 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: "0.9.0"
+    app.kubernetes.io/version: 1.0.0
 spec:
   description: >-
-    Runs a single skill's full evaluation as one Task, so Matrix can fan
-    out over it natively -- one TaskRun per skill in the Matrix source
-    array. materialize-source/skill-structure-validation/security-scan/skillmd-scan always run; the Tier B
-    (LLM) chain (validate/quality-review/run-eval/analyze-and-scorecard/store) only
-    runs when should-evaluate AND this leg's own is-changed flag are both
-    true. Emits two independent TEST_OUTPUT results -- TEST_OUTPUT_TIER_A
-    (hard-gated) and TEST_OUTPUT_TIER_B (informational, "SKIPPED" when
-    not applicable this run). Safe for concurrent matrix legs sharing one
-    workspace (see CONCURRENCY note above).
+    Run requested tiers and optional application persistence through one abeval
+    invocation. Use the existing Konflux task-runner for OCI evidence attachment
+    and standard Python images for inline result conversion.
   params:
     - name: submission-dir
       type: string
-      description: >-
-        Skill identifier in submission_dir form (e.g. rh-sre/cve-impact,
-        from scripts/catalog_tree.py). The real pack directory (skill-dir)
-        is mechanically derived from this below.
+      description: 'Catalog skill identifier: <pack>/<skill>.'
     - name: submission-revision
       type: string
-      description: Commit SHA of the repo to evaluate
+      description: Evaluated source commit SHA.
     - name: source-artifact
       type: string
+      description: Trusted source artifact for the evaluated revision.
+    - name: evaluation-image
+      type: string
       description: >-
-        The pipeline's own trusted Source Artifact (clone-repository's
-        SOURCE_ARTIFACT result) for submission-revision -- consumed
-        instead of a fresh `git clone` since this Task's pod has no
-        GitLab credentials of its own. See the materialize-source step below.
-    - name: image-url
+        Complete CLI image with both scanners, unchanged AEH runtime, model clients,
+        and storage clients.
+    - name: tiers
       type: string
-      default: ""
-      description: Component image repository whose digest receives this leg's report artifact.
-    - name: image-digest
-      type: string
-      default: ""
-      description: Built component image digest to which this leg's report artifact is attached.
-    - name: should-evaluate
-      type: string
-      default: "false"
-      description: >-
-        Pipeline-wide (same value for every leg): "true" only when the
-        push pipeline's check-pr-label found a merged MR labeled
-        "evaluate" for this commit. Always "false" on PR builds (Tier B's
-        LLM chain must never run there).
-    - name: changed-skills
-      type: array
-      default: []
-      description: >-
-        Full changed-skills array (same value for every leg, NOT a matrix
-        param) -- this leg's own is-changed flag is derived by the
-        compute-flags step below via a membership check of
-        submission-dir against this array. Empty on PR builds.
-    - name: enable-persistence
-      type: string
-      default: "false"
-      description: >-
-        Independent of should-evaluate/is-changed: whether this leg should
-        attempt analyze-and-scorecard (Compass Facts push) and store
-        (Postgres/MinIO) at all. Defaults "false" (the safe choice) so an
-        unmerged/exploratory PR run -- or any other caller that doesn't
-        pass this explicitly -- never writes to production Compass/
-        Postgres/MinIO. The push pipeline explicitly overrides this to
-        "true" so every skill's Tier A (cheap, non-LLM) security/quality
-        gate results get persisted on every push build, continuously,
-        across the full catalog -- this is the whole point of merging
-        Tier A/B into one Task (see header). Deliberately defaulted the
-        safe way (rather than requiring every caller to pass "false"
-        explicitly) so this Task also resolves safely via the
-        git-resolver-pinned-to-main mechanism every taskRef in both
-        pipeline files uses (see discover-changed-skills.yaml's header for
-        the full rationale) -- a caller that predates this param's
-        existence, or one (like the PR pipeline) that simply omits it, both
-        get the safe "false" behavior for free.
-    - name: harness-eval-version
-      type: string
-      default: "7.9.0"
-      description: >-
-        Pinned harness-eval version for deterministic SKILL.md scanning.
-        Bump this when a new harness-eval release is tested and ready.
-    - name: llm-api-key
-      type: string
-      default: "sk-dummy"
-    - name: llm-api-base
-      type: string
-      default: ""
-    - name: llm-model
-      type: string
-      default: "gemini-2.5-flash"
-    - name: aeh-mode
-      type: string
-      default: "single"
-    - name: task-image
-      type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0.2-task@sha256:d9efe91218c9b615657788c5fadbfb93340ccd51d19ce63a753a81715e84cafa"
-      description: Preparation, validation, review, reporting and persistence.
-    - name: runner-image
-      type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-runner@sha256:5fb940342c3c56cd25b5e80ae9684e4ad383bd62bb268083fa3840818a1ef76e"
-      description: AEH orchestration for run-eval.
-    - name: security-scan-image
-      type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0.1-security-scan@sha256:98d0d70e69f5a8d812c9730adaf8ce9a8b1018b4c17b1f0ac027d90718d14b09"
-      description: Cisco deterministic security scan.
-    - name: skillmd-scan-image
-      type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-skillmd-scan@sha256:5c35e22bfb5709941d93a88f1f0ecf4393779a9b77204be8ca26132d78311ad9"
-      description: Deterministic SKILL.md security and quality scan.
+      default: '1'
+      description: 'Evaluation tiers passed directly to the CLI: 1, 2, or 1,2.'
     - name: aeh-image
       type: string
-      default: "quay.io/ecosystem-appeng/agent-eval-harness:v4.0-trial@sha256:c8fdca4740c811ea4e4d3dcd411c4d98161374934799df5a0370e06a4635e0b1"
+      description: Trial image pullable by the workload cluster; required for
+        Tier 2.
+      default: ''
+    - name: persist
+      type: string
+      description: >-
+        Optional evaluation persistence: postgres,s3,compass. OCI evidence attachment
+        is controlled by image-url and image-digest.
+      default: ''
+    - name: persistence-required
+      type: string
+      description: Treat selected publication failures as errors.
+      default: 'true'
+    - name: image-url
+      type: string
+      default: ''
+      description: Built component image repository for OCI report attachment.
+    - name: image-digest
+      type: string
+      default: ''
+      description: Built component image digest for OCI report attachment.
+    - name: llm-secret
+      type: string
+      description: Konflux Secret containing api-key for local review and suite-level
+        judging.
+      default: llm-credentials
+    - name: llm-api-base
+      type: string
+      description: OpenAI-compatible review and judge endpoint, normally ending
+        in /v1.
+      default: ''
+    - name: llm-model
+      type: string
+      description: Submission and optional skill review model.
+      default: gemini-2.5-flash
+    - name: agent-api-base
+      type: string
+      description: Agent provider endpoint; for Claude through LiteLLM use the
+        gateway root.
+      default: ''
+    - name: skill-review
+      type: string
+      description: Enable advisory LLM skill review for every leg.
+      default: 'false'
+    - name: submission-review
+      type: string
+      description: auto honors submission metadata; also accepts on or off.
+      default: auto
+    - name: continue-on-tier1-failure
+      type: string
+      description: Run selected trials despite blocking static findings.
+      default: 'false'
     - name: aeh-model-override
       type: string
-      default: ""
+      description: Override submission agent model.
+      default: ''
     - name: aeh-judge-model-override
       type: string
-      default: ""
-    - name: aeh-runner
-      type: string
-      default: "harbor"
-    - name: aeh-control-config
-      type: string
-      default: "eval-control.yaml"
-    - name: aeh-treatment-config
-      type: string
-      default: "eval-treatment.yaml"
+      description: Override submission judge model.
+      default: ''
     - name: aeh-kubeconfig-secret
       type: string
-      default: "agentic-plugins-konflux-sa-kubeconfig"
+      description: Konflux Secret containing workload kubeconfig under key kubeconfig.
+      default: agentic-plugins-konflux-sa-kubeconfig
     - name: workload-namespace
       type: string
-      default: "agentic-plugins-evaluation"
+      description: Namespace on the workload cluster.
+      default: agentic-plugins-evaluation
+    - name: workload-credentials-secret
+      type: string
+      description: Existing workload Secret with native provider SDK environment
+        keys.
+      default: llm-credentials
+    - name: workload-service-account
+      type: string
+      description: Trial service account; empty uses native AEH defaults.
+      default: ''
+    - name: database-secret
+      type: string
+      description: Konflux Secret with database-url and optional database-tls-route-host.
+      default: ab-eval-db-credentials
+    - name: s3-secret
+      type: string
+      description: >-
+        Konflux Secret with endpoint-url, root-user, root-password, optional insecure-skip-tls-verify.
+      default: minio-credentials
+    - name: s3-bucket
+      type: string
+      description: S3 publication bucket.
+      default: ab-eval-reports
+    - name: compass-secret
+      type: string
+      description: Konflux Secret containing token.
+      default: compass-facts-api
+    - name: ca-bundle-configmap
+      type: string
+      description: Optional Konflux ConfigMap with trusted CA bundle at ca-bundle.crt.
+      default: trusted-ca-bundle
     - name: otel-exporter-endpoint
       type: string
-      default: ""
-      description: >-
-        Optional OTLP gRPC endpoint for the OTEL collector (e.g.
-        otel-collector:4317). Tracing is inert unless this is set.
-    - name: mock-mcp-binary
-      type: string
-      default: /opt/mock-mcp/src/server.py
-      description: >-
-        Path to the generic-mock-mcp-server entrypoint baked into this
-        trial image by agentic_eval_flow/containers/aeh-trial/Containerfile. The
-        swap-mock-mcp step below rewrites any mcps.json server entry this
-        skill mocks (auto-detected from cases/*/mock-mcps/<server>/
-        fixture.json -- no separate deploy task or URL plumbing needed) to
-        launch this binary over stdio with --schema/--fixtures pointing at
-        workspace-relative paths aeh_task_enrichment.py populates per case.
-        See that module's docstring for the full per-case mechanism.
+      description: Optional OTLP/gRPC collector endpoint.
+      default: ''
   workspaces:
     - name: source
-      description: >-
-        Shared across ALL concurrent matrix legs (one leg per skill, no
-        more Tier A/Tier B race on the same LEG_DIR). Each step computes
-        its own LEG_DIR subdirectory first -- see the CONCURRENCY note
-        above.
+      description: Scratch storage for isolated CLI runs; keyed by TaskRun name.
   results:
     - name: TEST_OUTPUT_TIER_A
-      description: >-
-        Standardized Konflux test output derived only from materialize-source/
-        skill-structure-validation/security-scan/skillmd-scan -- the pipeline's hard gate.
+      description: Konflux Tier 1 result, or SKIPPED when Tier 1 was not requested.
     - name: TEST_OUTPUT_TIER_B
-      description: >-
-        Standardized Konflux test output derived from the Tier B (LLM)
-        chain when it actually ran this leg; {"result": "SKIPPED", ...}
-        when should-evaluate/is-changed weren't both true this run.
+      description: Konflux Tier 2 result, or SKIPPED when Tier 2 was not requested.
+    - name: TEST_OUTPUT_PUBLICATION
+      description: Konflux result for all explicitly selected publication destinations.
     - name: skill-reports-ARTIFACT_OUTPUTS
       type: object
-      description: >-
-        Per-skill OCI report artifact attached to the built image. The uri
-        and digest form the exact immutable reference to pass to `oras pull`;
-        the skill field identifies this Matrix leg. Named for Tekton Chains'
-        ARTIFACT_OUTPUTS type hint so Chains can collect it as an output.
+      description: OCI report referrer, or empty uri/digest when none was attached.
       properties:
         uri: {}
         digest: {}
         skill: {}
+  stepTemplate:
+    env:
+      - name: ABEVAL_SOURCE
+        value: /var/workdir/source
+      - name: ABEVAL_OUTPUT
+        value: $(workspaces.source.path)/runs/$(context.taskRun.name)
+      - name: ABEVAL_RUN_ID
+        value: $(context.taskRun.name)
+      - name: ABEVAL_REVISION
+        value: $(params.submission-revision)
+      - name: ABEVAL_PERSISTENCE_REQUIRED
+        value: $(params.persistence-required)
+    volumeMounts:
+      - name: workdir
+        mountPath: /var/workdir
+      - name: trusted-ca
+        mountPath: /var/trusted-ca
+        readOnly: true
   volumes:
+    - name: workdir
+      emptyDir: {}
     - name: aeh-kubeconfig
       secret:
         secretName: $(params.aeh-kubeconfig-secret)
         optional: true
-    - name: workdir
-      emptyDir: {}
+    - name: trusted-ca
+      configMap:
+        name: $(params.ca-bundle-configmap)
+        optional: true
   steps:
-    # Unpacks the trusted Source Artifact into /var/workdir/source -- a
-    # Task-local emptyDir, not the shared `source` workspace, so concurrent
-    # matrix legs never contend for it. onError: continue -- a failure here
-    # is picked up and converted into a cascading-skip by materialize-source below.
     - name: use-trusted-artifact
       image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
       onError: continue
-      volumeMounts:
-        - name: workdir
-          mountPath: /var/workdir
       args:
         - use
         - $(params.source-artifact)=/var/workdir/source
-
-    # Copies (not clones) from the already-unpacked trusted artifact above
-    # into this leg's private LEG_DIR under the shared matrix workspace.
-    # This Task's pod has no git credentials of its own, so a fresh `git
-    # clone` isn't an option here; every leg needs exactly the commit the
-    # pipeline is already building, so reusing the trusted artifact avoids
-    # re-fetching content that's already sitting in an OCI artifact. Also
-    # creates `.baked-vars/` up front so every later step can rely on it.
-    - name: materialize-source
-      image: $(params.task-image)
+    - name: evaluate
+      image: $(params.evaluation-image)
       onError: continue
       env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: SUBMISSION_REVISION
-          value: $(params.submission-revision)
-      volumeMounts:
-        - name: workdir
-          mountPath: /var/workdir
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        echo "=== PREPARE: Copy from trusted source artifact ==="
-        if [ "$(cat "$(steps.step-use-trusted-artifact.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "ERROR: use-trusted-artifact failed earlier"
-          exit 1
-        fi
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        mkdir -p "${LEG_DIR}"
-        rm -rf "${LEG_DIR:?}"/{,.[!.],..?}* 2>/dev/null || true
-        cp -a /var/workdir/source/. "${LEG_DIR}/"
-        echo "Copied trusted source artifact into ${LEG_DIR} (revision $SUBMISSION_REVISION)"
-        mkdir -p "${LEG_DIR}/.baked-vars"
-
-        # Repair any git-tracked symlink that the trusted-artifact round
-        # trip (clone -> tar/OCI blob -> tar extract) flattened into a
-        # plain file containing only its own target path -- the classic
-        # symptom of a `core.symlinks=false` git client somewhere in that
-        # chain writing symlinks out as literal text instead of real OS
-        # symlinks. Several skill packs in this catalog deliberately
-        # symlink shared reference docs into sibling skills (e.g.
-        # rh-sre/skills/cve-validation/references/skill-invocation.md ->
-        # ../../remediation/references/skill-invocation.md); if that
-        # symlink survives as a one-line stub instead of real content,
-        # every downstream scan step sees a broken/missing reference
-        # instead of the actual doc, even though the real file is sitting
-        # right there in this same checkout. Purely defensive: only
-        # rewrites a file whose entire content is a single relative path
-        # that resolves to a real file inside this same leg checkout --
-        # never follows a path outside LEG_DIR, and is a no-op when
-        # symlinks survived intact (os.path.islink is already true) or a
-        # file's content is genuine prose.
-        python3 - "$LEG_DIR" <<'PYEOF'
-        import os
-        import sys
-
-        leg_dir = os.path.realpath(sys.argv[1])
-        repaired = 0
-        for root, _dirs, files in os.walk(leg_dir):
-            if "/.git" in root or root.endswith("/.git"):
-                continue
-            for name in files:
-                path = os.path.join(root, name)
-                if os.path.islink(path):
-                    continue
-                try:
-                    size = os.path.getsize(path)
-                    if size == 0 or size > 300:
-                        continue
-                    with open(path, encoding="utf-8") as f:
-                        content = f.read()
-                except (OSError, UnicodeDecodeError):
-                    continue
-                stripped = content.strip()
-                # A flattened symlink stub is exactly one line, has no
-                # spaces, and looks like a relative path -- not prose, not
-                # a markdown heading, not YAML frontmatter.
-                if (
-                    not stripped
-                    or "\n" in stripped
-                    or " " in stripped
-                    or "/" not in stripped
-                    or stripped.startswith(("#", "-", "*"))
-                ):
-                    continue
-                target = os.path.realpath(os.path.join(root, stripped))
-                if not target.startswith(leg_dir + os.sep) or target == path:
-                    continue  # never follow a path outside this leg's checkout
-                if not os.path.isfile(target):
-                    continue
-                with open(target, "rb") as src, open(path, "wb") as dst:
-                    dst.write(src.read())
-                repaired += 1
-                print(f"Repaired flattened symlink stub: {os.path.relpath(path, leg_dir)} -> {os.path.relpath(target, leg_dir)}")
-
-        if repaired:
-            print(f"Repaired {repaired} flattened symlink stub(s) under {leg_dir}")
-        PYEOF
-
-        # Resolve remaining real symlinks after repairing flattened stubs.
-        # The evaluation workload stages only one skill/plugin tree, so
-        # links into sibling skills would otherwise be dangling in trial pods.
-        if ! find "$LEG_DIR" -path "*/.git" -prune -o -type l -print0 | \
-        while IFS= read -r -d '' link; do
-          target=$(readlink -f "$link") || {
-            echo "Warning: could not resolve symlink: $link"
-            continue
-          }
-          if [ ! -e "$target" ]; then
-            echo "Skipped (broken link): $link"
-            continue
-          fi
-          echo "Resolving: $link -> $target"
-          rm "$link" || {
-            echo "Warning: could not remove symlink: $link"
-            continue
-          }
-          cp -a "$target" "$link" || echo "Warning: could not copy symlink target: $link"
-        done; then
-          echo "Warning: some symlinks could not be resolved; continuing"
-        fi
-        echo "Symlink repair and resolution complete."
-
-    # Computes this leg's own `is-changed` flag: "true" iff submission-dir
-    # is a member of the changed-skills array (identical for every leg).
-    # Writes it to .baked-vars/is-changed for later gated steps to read.
-    # Uses the $0/$@ positional-array convention for the array param (see
-    # update-registered-shas.yaml for the same pattern). Not gated on
-    # materialize-source's success -- this only writes a flag file.
-    - name: compute-flags
-      image: $(params.task-image)
-      onError: continue
-      command: ["bash", "-c"]
-      args:
-        - |
-          #!/usr/bin/env bash
-          set -euo pipefail
-          SUBMISSION_DIR="$1"; shift
-          IS_CHANGED="false"
-          for s in "$@"; do
-            if [ "$s" = "$SUBMISSION_DIR" ]; then
-              IS_CHANGED="true"
-              break
-            fi
-          done
-          LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-          LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-          VARS_DIR="${LEG_DIR}/.baked-vars"
-          mkdir -p "$VARS_DIR"
-          echo -n "$IS_CHANGED" > "$VARS_DIR/is-changed"
-          echo "is-changed for $SUBMISSION_DIR: $IS_CHANGED"
-        - "bash"
-        - "$(params.submission-dir)"
-        - "$(params.changed-skills[*])"
-
-    # Auto-detects which mcps.json server entries this skill mocks (any
-    # server name with at least one cases/*/mock-mcps/<server>/fixture.json
-    # anywhere in this submission -- no separate deploy task, URL, or
-    # per-skill opt-in flag needed any more) and rewrites exactly those
-    # entries in this leg's pack-level mcps.json (e.g. rh-sre/mcps.json) to
-    # a stdio command launching the mock-mcp-binary baked into the trial image
-    # (see agentic_eval_flow/containers/aeh-trial/Containerfile). mcps.json is each
-    # pack's real, committed MCP config, already in the shape Harbor's
-    # --mcp-config option expects, so this step only needs to edit it in
-    # place -- a pure file-level rewrite of this leg's own ephemeral
-    # checkout, done before run-eval invokes run_aeh.py.
-    #
-    # The --schema/--fixtures paths below are workspace-relative
-    # (/workspace/...) and therefore IDENTICAL across every case this job
-    # runs -- the same rewritten mcps.json is loaded once for the whole
-    # job (Harbor's --mcp-config, forwarded by containers/agent-eval-
-    # harness/patch_mcp_config.py, has no per-task override). Per-case
-    # fixture variation instead comes from
-    # abevalflow.harbor_extensions.aeh_task_enrichment, which copies each
-    # case's own fixture.json (plus the plugin's shared schema.json) to
-    # those exact paths inside that case's own trial-pod workspace -- see
-    # that module's docstring for the full mechanism. Unmocked server
-    # names in mcps.json are left untouched (real server, unaffected).
-    #
-    # ALSO generates+swaps any pairwise control arm's "<pack>-mcp-only"
-    # plugin_dirs sibling (a skill-less pack with no SKILL.md anywhere --
-    # the ONLY thing that stops agent_eval/harbor/run.py's
-    # _resolve_harbor_skill_roots from forwarding --skill for a plugin_dirs
-    # entry, confirmed empirically; there's no flag-based override). Logic
-    # extracted to scripts/swap_mock_mcp.py (baked into this image the same
-    # way as scripts/validate.py below) so it has real test coverage
-    # (agentic_eval_flow/tests/test_swap_mock_mcp.py) instead of living only
-    # as an untested inline heredoc -- and so run_aeh.py's own
-    # _prepare_enriched_tasks calls the SAME function for local dev runs,
-    # with no separate "remember to run this Tekton step" footgun.
-    - name: swap-mock-mcp
-      image: $(params.task-image)
-      onError: continue
-      env:
-        - name: MOCK_MCP_BINARY
-          value: "$(params.mock-mcp-binary)"
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: SHOULD_EVALUATE
-          value: $(params.should-evaluate)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ]; then
-          echo "Skipping: mock MCP swap not applicable this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED)"
-          exit 0
-        fi
-        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: materialize-source failed earlier"
-          exit 0
-        fi
-        echo "=== PREPARE: Swap mock MCP servers into pack mcps.json ==="
-        SUBMISSION_PATH="${LEG_DIR}/submissions/${SUBMISSION_DIR}"
-        PIPELINE_DIR="/opt/agent-eval-harness"
-        cd "$PIPELINE_DIR"
-        export PYTHONPATH="$PIPELINE_DIR"
-        python3 scripts/swap_mock_mcp.py \
-          --submission-path "$SUBMISSION_PATH" \
-          --mock-binary "$MOCK_MCP_BINARY"
-        echo "=== Mock MCP swap complete ==="
-
-    # Validates the AEH submission contract. First of the Tier B (LLM)
-    # chain steps -- every one of them checks should-evaluate/is-changed
-    # itself (in addition to the cascading prior-step-failure check) and
-    # exits 0 immediately when not opted in this run.
-    - name: validate
-      image: $(params.task-image)
-      onError: continue
-      env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: SHOULD_EVALUATE
-          value: $(params.should-evaluate)
-        - name: AEH_MODE
-          value: $(params.aeh-mode)
-        - name: AEH_CONTROL_CONFIG
-          value: $(params.aeh-control-config)
-        - name: AEH_TREATMENT_CONFIG
-          value: $(params.aeh-treatment-config)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ]; then
-          echo "Skipping: not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED)"
-          exit 0
-        fi
-        # Cascading skip: if an earlier step already had a runtime error,
-        # there's nothing useful for this step to do -- skip cleanly
-        # (exit 0, not a NEW failure) so emit-results sees only the
-        # ORIGINAL failure when it checks every step's exit code.
-        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: materialize-source failed earlier"
-          exit 0
-        fi
-        echo "=== PREPARE: Validate Submission ==="
-        PIPELINE_DIR="/opt/agent-eval-harness"
-        SUBMISSION_PATH="${LEG_DIR}/submissions/${SUBMISSION_DIR}"
-
-        # Most skills in the Compass catalog never commit an AEH submission
-        # at all (no submissions/<pack>/<skill>/ -- they're basic
-        # Claude-skill packs with no eval.yaml/cases/mock-mcps, e.g.
-        # rh-basic's own skills). is-changed/should-evaluate only tell us
-        # this skill was changed and opted in via the "evaluate" label --
-        # NOT that it has anything for AEH to evaluate. Treat "no
-        # metadata.yaml at all" as not applicable this run (same as an
-        # unmet is-changed/should-evaluate gate) rather than letting every
-        # python3 -c below crash with FileNotFoundError on a path that was
-        # never meant to exist. scripts/validate.py itself already handles
-        # a missing metadata.yaml gracefully (reports it as a validation
-        # error instead of crashing) -- but that's for a submission that
-        # DOES exist and is merely incomplete; a submission that doesn't
-        # exist on disk at all isn't a validation failure, it's "this skill
-        # doesn't participate in AEH evaluation."
-        if [ ! -f "$SUBMISSION_PATH/metadata.yaml" ]; then
-          echo "Skipping: no AEH submission committed for $SUBMISSION_DIR (no submissions/$SUBMISSION_DIR/metadata.yaml) -- this skill has no AEH evaluation setup"
-          echo -n "false" > "$VARS_DIR/has-aeh-submission"
-          exit 0
-        fi
-        echo -n "true" > "$VARS_DIR/has-aeh-submission"
-
-        cd "$PIPELINE_DIR"
-        export PYTHONPATH="$PIPELINE_DIR"
-
-        # Per-skill AEH mode: metadata.yaml's own `aeh_mode` (if set) wins
-        # over this pipeline-wide AEH_MODE/AEH_CONTROL_CONFIG/
-        # AEH_TREATMENT_CONFIG default -- lets one submission (e.g. a
-        # pairwise control/treatment pair) opt into AEH_MODE=pairwise
-        # without flipping every other skill's Matrix leg on every push
-        # (.tekton/*.yaml's own AEH_MODE param stays "single" catalog-wide).
-        # Falls back to the pipeline param whenever metadata.yaml omits the
-        # field. Baked to .baked-vars/ so the run-eval step (which runs as
-        # a separate container, no shared bash state) resolves the SAME
-        # effective values without re-reading metadata.yaml itself.
-        EFFECTIVE_AEH_MODE=$(python3 -c "
-        import yaml
-        meta = yaml.safe_load(open('$SUBMISSION_PATH/metadata.yaml')) or {}
-        print(meta.get('aeh_mode') or '$AEH_MODE', end='')
-        ")
-        EFFECTIVE_AEH_CONTROL_CONFIG=$(python3 -c "
-        import yaml
-        meta = yaml.safe_load(open('$SUBMISSION_PATH/metadata.yaml')) or {}
-        print(meta.get('aeh_control_config') or '$AEH_CONTROL_CONFIG', end='')
-        ")
-        EFFECTIVE_AEH_TREATMENT_CONFIG=$(python3 -c "
-        import yaml
-        meta = yaml.safe_load(open('$SUBMISSION_PATH/metadata.yaml')) or {}
-        print(meta.get('aeh_treatment_config') or '$AEH_TREATMENT_CONFIG', end='')
-        ")
-        echo "Effective AEH mode for $SUBMISSION_DIR: $EFFECTIVE_AEH_MODE (pipeline default: $AEH_MODE)"
-
-        python scripts/validate.py "$SUBMISSION_PATH" --eval-engine aeh \
-          --aeh-mode "$EFFECTIVE_AEH_MODE" \
-          --aeh-control-config "$EFFECTIVE_AEH_CONTROL_CONFIG" \
-          --aeh-treatment-config "$EFFECTIVE_AEH_TREATMENT_CONFIG" \
-          | tee /tmp/validation-output.json
-        # REPORT_KEY INVARIANT: every step that reads/writes under reports/
-        # keys the path by SUBMISSION_NAME (metadata.yaml's `name`), never
-        # by SUBMISSION_DIR (the submissions/<pack>/<skill> path param).
-        # The two only coincide for flat, non-nested submission dirs --
-        # for a nested one like "rh-sre/cve-validation" (name:
-        # cve-validation), writing validation.json under
-        # reports/${SUBMISSION_DIR}/ silently diverges from every later
-        # reader (aggregate-scorecard's reports_dir is SUBMISSION_NAME-
-        # keyed), so validation.json is never found downstream even though
-        # this step printed "Validation PASSED" -- certification then
-        # defaults validation_passed/metadata_valid to False for every
-        # nested submission, regardless of actual quality. Resolve
-        # SUBMISSION_NAME before computing REPORTS_DIR so this step
-        # matches every other reports/ writer in this task.
-        SUBMISSION_NAME=$(python3 -c "
-        import yaml, sys
-        meta = yaml.safe_load(open(sys.argv[1]))
-        print(meta['name'], end='')
-        " "$SUBMISSION_PATH/metadata.yaml")
-        REPORTS_DIR="${LEG_DIR}/reports/${SUBMISSION_NAME}"
-        mkdir -p "$REPORTS_DIR"
-        cp /tmp/validation-output.json "$REPORTS_DIR/validation.json"
-        VALID=$(python3 -c "import json; print(json.load(open('/tmp/validation-output.json'))['valid'])")
-        if [ "$VALID" != "True" ]; then
-          echo "Validation FAILED"
-          exit 1
-        fi
-        echo -n "$EFFECTIVE_AEH_MODE" > "$VARS_DIR/aeh-mode"
-        echo -n "$EFFECTIVE_AEH_CONTROL_CONFIG" > "$VARS_DIR/aeh-control-config"
-        echo -n "$EFFECTIVE_AEH_TREATMENT_CONFIG" > "$VARS_DIR/aeh-treatment-config"
-        echo -n "$SUBMISSION_NAME" > "$VARS_DIR/submission-name"
-        python3 -c "
-        import yaml, sys
-        meta = yaml.safe_load(open(sys.argv[1]))
-        print(str(meta.get('skip_quality_review', False)).lower(), end='')
-        " "$SUBMISSION_PATH/metadata.yaml" > "$VARS_DIR/skip-quality-review"
-        TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
-        echo -n "${TIMESTAMP}_${SUBMISSION_NAME}_$(context.taskRun.name)" > "$VARS_DIR/report-prefix"
-        echo "Validation PASSED"
-        echo "Submission: $SUBMISSION_NAME"
-        echo "Report prefix: $(cat "$VARS_DIR/report-prefix")"
-
-    # Tier A structure validation: validates the real skill independently of
-    # the optional AEH submission. A failed check still writes its report so
-    # analyze-and-scorecard can publish the failure to Compass.
-    - name: skill-structure-validation
-      image: $(params.task-image)
-      onError: continue
-      env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: materialize-source failed earlier"
-          exit 0
-        fi
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        PACK="${SUBMISSION_DIR%/*}"
-        SKILL_NAME="${SUBMISSION_DIR##*/}"
-        SKILL_PATH="${LEG_DIR}/${PACK}/skills/${SKILL_NAME}"
-        REPORT_KEY=$(cat "${VARS_DIR}/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
-        REPORT_DIR="${LEG_DIR}/reports/${REPORT_KEY}"
-        PIPELINE_DIR="/opt/agent-eval-harness"
-        cd "$PIPELINE_DIR"
-        export PYTHONPATH="$PIPELINE_DIR"
-        python3 scripts/validate_skill_structure.py "$SKILL_PATH" \
-          --output "$REPORT_DIR/skill-structure-validation.json"
-
-    # Tier A security scan: always runs regardless of should-evaluate/
-    # is-changed, scanning the skill's real pack directory (skill-dir,
-    # mechanically derived from submission-dir), LLM always off, always
-    # --fail-on-severity high. Only gated on materialize-source's success.
-    - name: security-scan
-      image: $(params.security-scan-image)
-      onError: continue
-      env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: materialize-source failed earlier"
-          exit 0
-        fi
-        echo "=== TEST: Security Scan (Tier A, always runs, LLM forced off) ==="
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        # skill-dir is submission-dir with "skills" inserted before the
-        # last path segment -- a mechanical transform across the catalog.
-        PACK="$SUBMISSION_DIR"; PACK="${PACK%/*}"
-        SKILL_NAME="$SUBMISSION_DIR"; SKILL_NAME="${SKILL_NAME##*/}"
-        SKILL_PATH="${LEG_DIR}/${PACK}/skills/${SKILL_NAME}"
-        # See the header's REPORT_KEY INVARIANT note -- must match every
-        # other step that reads/writes under reports/.
-        REPORT_KEY=$(cat "${VARS_DIR}/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
-        REPORT_DIR="${LEG_DIR}/reports/${REPORT_KEY}"
-        JSON_PATH="$REPORT_DIR/security-scan.json"
-        SARIF_PATH="$REPORT_DIR/security-scan.sarif"
-        mkdir -p "$REPORT_DIR"
-        if [ ! -f "$SKILL_PATH/SKILL.md" ]; then
-          echo "ERROR: no SKILL.md found at $SKILL_PATH" >&2
-          exit 1
-        fi
-        if ! command -v skill-scanner >/dev/null 2>&1; then
-          echo "ERROR: skill-scanner not found in image -- rebuild the image assigned to this step" >&2
-          exit 1
-        fi
-        # --use-llm is intentionally never passed here -- LLM is always
-        # off for this shared scan, regardless of any skill's own
-        # metadata.yaml.
-        set +e
-        skill-scanner scan "$SKILL_PATH" --format json --output-json "$JSON_PATH" --output-sarif "$SARIF_PATH" \
-          --lenient --verbose --fail-on-severity high 2>&1 | tee /tmp/scan-output.txt
-        SCAN_EXIT=$?
-        set -e
-        if [ "$SCAN_EXIT" -ne 0 ]; then
-          echo "ERROR: security scan found high-severity findings (exit=$SCAN_EXIT)"
-          exit 1
-        fi
-        echo "Security scan complete"
-
-    # Tier A SKILL.md scan (harness-eval): always runs, gated only on
-    # materialize-source's success. skillmd-quality-scan.json is leg-root (not
-    # REPORT_KEY-scoped); the security findings file is.
-    - name: skillmd-scan
-      image: $(params.skillmd-scan-image)
-      onError: continue
-      env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: HARNESS_EVAL_VERSION
-          value: $(params.harness-eval-version)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: materialize-source failed earlier"
-          exit 0
-        fi
-        echo "=== TEST: SKILL.md Scan (harness-eval, Tier A, always runs) ==="
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        PACK="$SUBMISSION_DIR"; PACK="${PACK%/*}"
-        SKILL_NAME="$SUBMISSION_DIR"; SKILL_NAME="${SKILL_NAME##*/}"
-        SKILL_PATH="${LEG_DIR}/${PACK}/skills/${SKILL_NAME}"
-        REPORT_KEY=$(cat "${VARS_DIR}/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
-        REPORT_DIR="${LEG_DIR}/reports/${REPORT_KEY}"
-        SECURITY_JSON="$REPORT_DIR/skillmd-security-scan.json"
-        QUALITY_JSON="${LEG_DIR}/skillmd-quality-scan.json"
-        mkdir -p "$REPORT_DIR"
-
-        HARNESS_VERSION="$HARNESS_EVAL_VERSION"
-        if ! command -v harness-eval >/dev/null 2>&1; then
-          echo "ERROR: harness-eval not found in image -- rebuild the image assigned to this step" >&2
-          exit 1
-        fi
-        BAKED_HARNESS_VERSION=$(python3 -c 'from importlib.metadata import version; print(version("harness-eval"))')
-        if [ "$BAKED_HARNESS_VERSION" != "$HARNESS_VERSION" ]; then
-          echo "ERROR: expected harness-eval==$HARNESS_VERSION, image contains $BAKED_HARNESS_VERSION" >&2
-          exit 1
-        fi
-        echo "Using baked-in harness-eval $BAKED_HARNESS_VERSION"
-
-        echo "Scanning: $SKILL_PATH (harness-eval==$HARNESS_VERSION)"
-        harness-eval skill-submission-scan "$SKILL_PATH" \
-          --output-quality "$QUALITY_JSON" --output-security "$SECURITY_JSON" 2>&1 || true
-
-        if [ ! -f "$QUALITY_JSON" ] || [ ! -f "$SECURITY_JSON" ]; then
-          echo "ERROR: scan output not produced -- the harness-eval CLI may have failed to install or crashed."
-          exit 1
-        fi
-
-        for JSON_FILE in "$SECURITY_JSON" "$QUALITY_JSON"; do
-          BASENAME=$(basename "$JSON_FILE")
-          COUNT=$(python3 -c "import json; print(len(json.load(open('$JSON_FILE')).get('findings', [])))" 2>/dev/null || echo "0")
-          echo "$BASENAME: $COUNT findings"
-        done
-        echo "SKILL.md scan complete"
-
-    # Tier B chain, step 2: LLM-based quality review.
-    - name: quality-review
-      image: $(params.task-image)
-      env:
-        - name: LLM_API_KEY
-          value: "$(params.llm-api-key)"
-        - name: AEH_INSECURE_SSL
-          value: "1"
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: SHOULD_EVALUATE
-          value: $(params.should-evaluate)
-        - name: LLM_API_BASE
+        - name: ABEVAL_SCANNER_RUNTIME
+          value: local
+        - name: ABEVAL_PERSIST
+          value: $(params.persist)
+        - name: ABEVAL_LLM_BASE_URL
           value: $(params.llm-api-base)
-        - name: LLM_MODEL_PARAM
+        - name: ABEVAL_JUDGE_BASE_URL
+          value: $(params.llm-api-base)
+        - name: ABEVAL_AGENT_BASE_URL
+          value: $(params.agent-api-base)
+        - name: ABEVAL_LLM_MODEL
           value: $(params.llm-model)
-      onError: continue
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        HAS_AEH_SUBMISSION=$(cat "${VARS_DIR}/has-aeh-submission" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ] || [ "$HAS_AEH_SUBMISSION" != "true" ]; then
-          echo "Skipping: not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED, has-aeh-submission=$HAS_AEH_SUBMISSION)"
-          exit 0
-        fi
-        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-security-scan.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-skillmd-scan.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: an earlier step failed"
-          exit 0
-        fi
-        echo "=== TEST: Quality Review ==="
-        SUBMISSION_SKIP=$(cat "$VARS_DIR/skip-quality-review")
-        if [ "$SUBMISSION_SKIP" = "true" ]; then
-          echo "Quality review disabled (skip_quality_review=true)"
-          exit 0
-        fi
-        # openai must be baked into the image -- abevalflow.llm_client.get_client()
-        # imports it directly. Fail loudly instead of a runtime pip
-        # install; containers are immutable.
-        if ! python3 -c "import openai" >/dev/null 2>&1; then
-          echo "ERROR: openai not found in image -- rebuild the image assigned to this step" >&2
-          exit 1
-        fi
-        PIPELINE_DIR="/opt/agent-eval-harness"
-        SUBMISSION_PATH="${LEG_DIR}/submissions/${SUBMISSION_DIR}"
-        cd "$PIPELINE_DIR"
-        export PYTHONPATH="$PIPELINE_DIR"
-        export LLM_BASE_URL="$LLM_API_BASE"
-        export LLM_MODEL="$LLM_MODEL_PARAM"
-        set +e
-        python scripts/test_quality_review.py "$SUBMISSION_PATH" | tee /tmp/review-output.json
-        set -e
-        cp /tmp/review-output.json "${LEG_DIR}/_ai_review.json" 2>/dev/null || true
-        PASSED=$(python3 -c "import json; print(str(json.load(open('/tmp/review-output.json')).get('passed', False)).lower())" 2>/dev/null || echo "true")
-        echo "Quality review: passed=$PASSED"
-
-        # Preserve review token usage for the later store step, which writes
-        # it to the observability-metrics table. Keep this in the review
-        # step so checkpoint bookkeeping needs no separate container.
-        SUBMISSION_NAME=$(cat "$VARS_DIR/submission-name")
-        REPORT_DIR="${LEG_DIR}/reports/${SUBMISSION_NAME}"
-        mkdir -p "$REPORT_DIR"
-        export PYTHONPATH="/opt/agent-eval-harness"
-        python3 /opt/agent-eval-harness/scripts/write_metrics_checkpoint.py \
-          --run-id "$(context.taskRun.name)" \
-          --submission-name "$SUBMISSION_NAME" \
-          --report-dir "$REPORT_DIR" \
-          --review-file "${LEG_DIR}/_ai_review.json" \
-          2>&1 || echo "Warning: metrics checkpoint failed (non-blocking)"
-
-    # Tier B chain, core evaluation step: runs the AEH evaluation itself.
-    - name: run-eval
-      image: $(params.runner-image)
-      volumeMounts:
-        - name: aeh-kubeconfig
-          mountPath: /tmp/aeh-kubeconfig
-          readOnly: true
-      env:
-        - name: OPENAI_API_KEY
-          value: "$(params.llm-api-key)"
-        # See sitecustomize.py in the AEH image: the `score.py pairwise`
-        # A/B comparison call below runs as a plain subprocess of this
-        # step's own container (never spawned through OpenShiftEnvironment,
-        # which auto-injects this for Harbor trial pods -- see
-        # OpenShiftEnvironment._pod_manifest's env.setdefault), so it needs
-        # this set explicitly to trust the cluster's self-signed ingress
-        # cert on the internal LiteLLM route. Without it, the pairwise
-        # judge call fails SSL verification, surfacing only as a generic
-        # "AB failed: Connection error." with wins_a=wins_b=0 (errors=2),
-        # which drives AEH's evaluation gate to "fail" even when both arms'
-        # own judges scored well.
-        - name: AEH_INSECURE_SSL
-          value: "1"
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: SHOULD_EVALUATE
-          value: $(params.should-evaluate)
-        - name: WORKLOAD_NAMESPACE_PARAM
-          value: $(params.workload-namespace)
-        - name: LLM_API_BASE
-          value: $(params.llm-api-base)
-        - name: AEH_MODE_PARAM
-          value: $(params.aeh-mode)
-        - name: AEH_RUNNER_PARAM
-          value: $(params.aeh-runner)
-        - name: AEH_IMAGE_PARAM
-          value: $(params.aeh-image)
-        - name: AEH_CONTROL_CONFIG_PARAM
-          value: $(params.aeh-control-config)
-        - name: AEH_TREATMENT_CONFIG_PARAM
-          value: $(params.aeh-treatment-config)
-        - name: AEH_MODEL_OVERRIDE_PARAM
+        - name: ABEVAL_SKILL_REVIEW
+          value: $(params.skill-review)
+        - name: ABEVAL_SUBMISSION_REVIEW
+          value: $(params.submission-review)
+        - name: ABEVAL_CONTINUE_ON_TIER1_FAILURE
+          value: $(params.continue-on-tier1-failure)
+        - name: ABEVAL_MODEL
           value: $(params.aeh-model-override)
-        - name: AEH_JUDGE_MODEL_OVERRIDE_PARAM
+        - name: ABEVAL_JUDGE_MODEL
           value: $(params.aeh-judge-model-override)
-      onError: continue
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        HAS_AEH_SUBMISSION=$(cat "${VARS_DIR}/has-aeh-submission" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ] || [ "$HAS_AEH_SUBMISSION" != "true" ]; then
-          echo "Skipping: not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED, has-aeh-submission=$HAS_AEH_SUBMISSION)"
-          exit 0
-        fi
-        # Deliberately NOT gated on security-scan/skillmd-scan/
-        # quality-review's exit codes -- those are hard-gated independently
-        # at the pipeline level (see header, TWO SEPARATE RESULTS); a
-        # finding there should not prevent the real AEH evaluation from
-        # running and being scored/persisted. Only a genuine materialize-source/
-        # validate failure (no usable submission at all) skips run-eval.
-        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: an earlier step failed"
-          exit 0
-        fi
-        echo "=== EVALUATE (AEH, local mode) ==="
-        SUBMISSION_NAME=$(cat "$VARS_DIR/submission-name")
-        SUBMISSION_PATH="${LEG_DIR}/submissions/${SUBMISSION_DIR}"
-        REPORT_DIR="${LEG_DIR}/reports/$SUBMISSION_NAME"
-        mkdir -p "$REPORT_DIR"
-
-        PIPELINE_DIR="/opt/agent-eval-harness"
-        cd "$PIPELINE_DIR"
-        export PYTHONPATH="$PIPELINE_DIR"
-
-        # Prefer the validate step's per-leg EFFECTIVE_AEH_MODE (baked from
-        # this submission's own metadata.yaml `aeh_mode`, falling back to
-        # the pipeline param) over the raw pipeline param directly -- see
-        # that step's own comment. The baked file always exists here: this
-        # step is gated on validate's own exit code above.
-        AEH_MODE=$(cat "$VARS_DIR/aeh-mode" 2>/dev/null || echo "$AEH_MODE_PARAM")
-        AEH_RUNNER="$AEH_RUNNER_PARAM"
-        AEH_IMAGE="$AEH_IMAGE_PARAM"
-        echo "Mode: $AEH_MODE | Runner: $AEH_RUNNER"
-
-        if [ -f /tmp/aeh-kubeconfig/kubeconfig ]; then
-          echo "External kubeconfig detected, configuring remote cluster access"
-          export KUBECONFIG=/tmp/aeh-kubeconfig/kubeconfig
-          unset KUBERNETES_SERVICE_HOST KUBERNETES_SERVICE_PORT 2>/dev/null || true
-          WORKLOAD_NS="$WORKLOAD_NAMESPACE_PARAM"
-          if [ -n "$WORKLOAD_NS" ]; then
-            export AGENT_EVAL_K8S_NAMESPACE="$WORKLOAD_NS"
-          else
-            AGENT_EVAL_K8S_NAMESPACE=$(python3 -c 'from kubernetes.config import list_kube_config_contexts; _, context = list_kube_config_contexts(); print((context or {}).get("context", {}).get("namespace", "default"))')
-            export AGENT_EVAL_K8S_NAMESPACE
-          fi
-        else
-          AGENT_EVAL_K8S_NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || echo "default")
-          export AGENT_EVAL_K8S_NAMESPACE
-        fi
-        export AGENT_EVAL_K8S_CREDENTIALS_SECRET="llm-credentials"
-        export AGENT_EVAL_RUNS_DIR="$REPORT_DIR"
-        export ANTHROPIC_BASE_URL="$LLM_API_BASE"
-        export ANTHROPIC_API_KEY="$OPENAI_API_KEY"
-        export AGENT_EVAL_K8S_KEEP_RUN="0"
-        echo "K8s namespace: $AGENT_EVAL_K8S_NAMESPACE"
-        echo "KUBECONFIG: ${KUBECONFIG:-in-cluster}"
-
-        EVAL_CONFIG="eval.yaml"
-        # Same per-leg-effective-value preference as AEH_MODE above.
-        CONTROL_CONFIG=$(cat "$VARS_DIR/aeh-control-config" 2>/dev/null || echo "$AEH_CONTROL_CONFIG_PARAM")
-        TREATMENT_CONFIG=$(cat "$VARS_DIR/aeh-treatment-config" 2>/dev/null || echo "$AEH_TREATMENT_CONFIG_PARAM")
-
-        MODEL="$AEH_MODEL_OVERRIDE_PARAM"
-        if [ -z "$MODEL" ]; then
-          CFG_FILE="$SUBMISSION_PATH/$EVAL_CONFIG"
-          [ "$AEH_MODE" = "pairwise" ] && CFG_FILE="$SUBMISSION_PATH/$TREATMENT_CONFIG"
-          MODEL=$(python3 -c "
-        import yaml
-        config = yaml.safe_load(open('$CFG_FILE'))
-        models = config.get('models', {})
-        if isinstance(models, str):
-            print(models)
-        else:
-            print(models.get('skill', 'claude-sonnet'))
-        ")
-        fi
-
-        JUDGE_OVERRIDE="$AEH_JUDGE_MODEL_OVERRIDE_PARAM"
-        if [ -z "$JUDGE_OVERRIDE" ] && [ -n "$MODEL" ]; then
-          JUDGE_OVERRIDE="$MODEL"
-        fi
-        echo "Model: $MODEL | Judge: ${JUDGE_OVERRIDE:-none}"
-
-        AEH_THRESHOLD=$(python3 -c "
-        from pathlib import Path
-        from abevalflow.aeh_scoring import resolve_evaluation_threshold
-        print(resolve_evaluation_threshold(Path('$SUBMISSION_PATH') / 'metadata.yaml'))
-        ")
-        echo "AEH threshold: $AEH_THRESHOLD"
-
-        SKILL_NAME=$(python3 -c "
-        import yaml
-        cfg = '$EVAL_CONFIG'
-        if '$AEH_MODE' == 'pairwise':
-            cfg = '$TREATMENT_CONFIG'
-        config = yaml.safe_load(open('$SUBMISSION_PATH/' + cfg))
-        print(config.get('skill', '$SUBMISSION_NAME'))
-        ")
-
-        EVAL_TMP="${LEG_DIR}/_eval_tmp"
-        mkdir -p "$EVAL_TMP/aeh-tasks" "$EVAL_TMP/aeh-jobs"
-
-        if [ "$AEH_MODE" = "pairwise" ]; then
-          echo "=== AEH Pairwise A/B Evaluation ==="
-          set +e
-          python scripts/run_aeh.py pairwise \
-            --runner "$AEH_RUNNER" \
-            --control-config "$SUBMISSION_PATH/$CONTROL_CONFIG" \
-            --treatment-config "$SUBMISSION_PATH/$TREATMENT_CONFIG" \
-            --output "$REPORT_DIR" \
-            --run-id "$(context.taskRun.name)" \
-            --model "$MODEL" \
-            ${JUDGE_OVERRIDE:+--judge-model "$JUDGE_OVERRIDE"} \
-            ${AEH_IMAGE:+--image "$AEH_IMAGE"} \
-            --tasks-dir "$EVAL_TMP/aeh-tasks" \
-            --jobs-dir "$EVAL_TMP/aeh-jobs" \
-            --judge pairwise
-          AEH_EXIT=$?
-          set -e
-
-          CONTROL_DIR="$REPORT_DIR/$SKILL_NAME/control-$(context.taskRun.name)"
-          TREATMENT_DIR="$REPORT_DIR/$SKILL_NAME/treatment-$(context.taskRun.name)"
-
-          if [ ! -f "$CONTROL_DIR/summary.yaml" ]; then
-            echo "ERROR: Control run failed - no summary.yaml in $CONTROL_DIR"
-            exit 1
-          fi
-          if [ ! -f "$TREATMENT_DIR/summary.yaml" ]; then
-            echo "ERROR: Treatment run failed - no summary.yaml in $TREATMENT_DIR"
-            exit 1
-          fi
-
-          python scripts/aggregate_aeh.py "$TREATMENT_DIR" \
-            --mode pairwise \
-            --control-dir "$CONTROL_DIR" \
-            --submission-name "$SUBMISSION_NAME" \
-            --threshold "$AEH_THRESHOLD" \
-            --treatment-config "$SUBMISSION_PATH/$TREATMENT_CONFIG" \
-            --control-config "$SUBMISSION_PATH/$CONTROL_CONFIG" \
-            --output "$REPORT_DIR/report.json"
-        else
-          echo "=== AEH Single Evaluation ==="
-          OUT_DIR="$REPORT_DIR/$SKILL_NAME/$(context.taskRun.name)"
-          mkdir -p "$OUT_DIR"
-
-          set +e
-          python scripts/run_aeh.py single \
-            --runner "$AEH_RUNNER" \
-            --config "$SUBMISSION_PATH/$EVAL_CONFIG" \
-            --output "$OUT_DIR" \
-            ${MODEL:+--model "$MODEL"} \
-            ${JUDGE_OVERRIDE:+--judge-model "$JUDGE_OVERRIDE"} \
-            ${AEH_IMAGE:+--image "$AEH_IMAGE"} \
-            --tasks-dir "$EVAL_TMP/aeh-tasks" \
-            --jobs-dir "$EVAL_TMP/aeh-jobs"
-          AEH_EXIT=$?
-          set -e
-
-          if [ ! -f "$OUT_DIR/summary.yaml" ] && [ ! -f "$OUT_DIR/run_result.json" ]; then
-            echo "ERROR: AEH single produced no summary.yaml or run_result.json"
-            exit 1
-          fi
-
-          python scripts/aggregate_aeh.py "$OUT_DIR" \
-            --submission-name "$SUBMISSION_NAME" \
-            --threshold "$AEH_THRESHOLD" \
-            --config "$SUBMISSION_PATH/$EVAL_CONFIG" \
-            --output "$REPORT_DIR/report.json"
-        fi
-
-        if [ "$AEH_EXIT" -ne 0 ] && [ ! -f "$REPORT_DIR/report.json" ]; then
-          echo "ERROR: AEH evaluation exited $AEH_EXIT with no report"
-          exit "$AEH_EXIT"
-        fi
-
-        echo "=== Evaluate phase complete ==="
-
-    # Scorecard/Compass-Facts step, gated on enable-persistence only (see
-    # header). --reports-dir/--workspace-root keying uses the same
-    # REPORT_KEY fallback as security-scan/skillmd-scan, so this finds
-    # whatever those two wrote whether or not validate/run-eval ran.
-    - name: analyze-and-scorecard
-      image: $(params.task-image)
-      env:
-        - name: COMPASS_API_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: compass-facts-api
-              key: token
-              optional: true
-        - name: AEH_INSECURE_SSL
-          value: "1"
+        - name: ABEVAL_KUBECONFIG
+          value: /var/workload/kubeconfig
+        - name: ABEVAL_NAMESPACE
+          value: $(params.workload-namespace)
+        - name: ABEVAL_CREDENTIALS_SECRET
+          value: $(params.workload-credentials-secret)
+        - name: ABEVAL_TRIAL_IMAGE
+          value: $(params.aeh-image)
+        - name: AGENT_EVAL_K8S_SERVICE_ACCOUNT
+          value: $(params.workload-service-account)
+        - name: ABEVAL_S3_BUCKET
+          value: $(params.s3-bucket)
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: "$(params.otel-exporter-endpoint)"
-        - name: OTEL_SERVICE_NAME
-          value: "abevalflow"
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: SUBMISSION_REVISION
-          value: $(params.submission-revision)
-        - name: ENABLE_PERSISTENCE
-          value: $(params.enable-persistence)
-      onError: continue
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        if [ "$ENABLE_PERSISTENCE" != "true" ]; then
-          echo "Skipping: persistence disabled this run (enable-persistence=$ENABLE_PERSISTENCE, e.g. a PR build)"
-          exit 0
-        fi
-        # validate/quality-review/run-eval may be intentionally
-        # flag-skipped (exit 0) -- that's fine, this step still proceeds
-        # on whatever Tier A artifacts security-scan/skillmd-scan
-        # produced. Only a genuine materialize-source/validate/run-eval failure
-        # skips this step; a security-scan/skillmd-scan/quality-review
-        # failure does not (aggregate_scorecard.py reads their findings
-        # from disk regardless of exit code).
-        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-run-eval.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: an earlier step failed"
-          exit 0
-        fi
-        echo "=== ANALYZE + SCORECARD ==="
-        if [ -n "$OTEL_EXPORTER_OTLP_ENDPOINT" ]; then
-          echo "OTEL tracing enabled -> $OTEL_EXPORTER_OTLP_ENDPOINT"
-          python3 -c "import opentelemetry.sdk; import opentelemetry.exporter.otlp.proto.grpc.trace_exporter"
-        fi
-        # See the header's REPORT_KEY INVARIANT note.
-        SUBMISSION_NAME=$(cat "${VARS_DIR}/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
-        PIPELINE_DIR="/opt/agent-eval-harness"
-        cd "$PIPELINE_DIR"
-        export PYTHONPATH="$PIPELINE_DIR"
-
-        REPORT_DIR="${LEG_DIR}/reports/$SUBMISSION_NAME"
-        RESULTS_DIR="${LEG_DIR}/eval-results/$SUBMISSION_NAME"
-
-        if [ -f "$REPORT_DIR/report.json" ]; then
-          echo "=== report.json already computed by evaluate phase ==="
-          python3 -c "
-        import json, sys
-        r = json.load(open(sys.argv[1]))
-        s = r.get('summary', {})
-        t = s.get('treatment', {})
-        print(f\"Recommendation: {s.get('recommendation', 'N/A')}\")
-        print(f\"Mean reward: {t.get('mean_reward', 'N/A')}\")
-        " "$REPORT_DIR/report.json"
-          python scripts/analyze.py --report-json "$REPORT_DIR/report.json"
-        else
-          echo "No AEH report: aggregating Tier A scan results only"
-        fi
-
-        echo "=== Aggregating Unified Scorecard ==="
-        # --submission-dir must be the real on-disk submission path (via
-        # SUBMISSION_DIR), not $SUBMISSION_NAME (metadata.yaml's
-        # `name:` field) -- the latter doesn't point at a real directory
-        # and would silently fall back to defaults. Nonexistent
-        # --submission-dir/--results-dir paths are safe: aggregate_scorecard.py
-        # falls back to default gate policy rather than crashing.
-        python scripts/aggregate_scorecard.py \
-          --submission-dir "${LEG_DIR}/submissions/${SUBMISSION_DIR}" \
-          --results-dir "$RESULTS_DIR" \
-          --reports-dir "$REPORT_DIR" \
-          --workspace-root "${LEG_DIR}" \
-          --eval-engine aeh \
-          --pipeline-run-id "$(context.taskRun.name)"
-
-        if [ -f "$REPORT_DIR/scorecard.json" ]; then
-          python3 -m json.tool "$REPORT_DIR/scorecard.json" 2>/dev/null | head -30 || true
-        else
-          echo "WARNING: scorecard.json not created"
-        fi
-
-        python3 /opt/agent-eval-harness/scripts/print_compass_facts_debug.py --report-dir "$REPORT_DIR" || true
-        echo "=== Analysis complete ==="
-
-    # Package the same report objects the MinIO publisher writes and attach
-    # them as an OCI referrer to the built component image.
-    - name: package-oci-reports
-      image: $(params.task-image)
-      onError: continue
-      env:
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-        - name: ENABLE_PERSISTENCE
-          value: $(params.enable-persistence)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        if [ "$ENABLE_PERSISTENCE" != "true" ]; then
-          echo "Skipping OCI report package: persistence disabled"
-          exit 0
-        fi
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        SUBMISSION_NAME=$(cat "${VARS_DIR}/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
-        REPORT_PREFIX=$(cat "${VARS_DIR}/report-prefix" 2>/dev/null || echo "$(date -u +%Y%m%d_%H%M%S)_${SUBMISSION_NAME}_$(context.taskRun.name)")
-        REPORT_DIR="${LEG_DIR}/reports/${SUBMISSION_NAME}"
-        ARCHIVE_DIR="${LEG_DIR}/oci-artifacts"
-        ARCHIVE_NAME="${LEG_SLUG}-reports.tar.gz"
-        ARCHIVE="${ARCHIVE_DIR}/${ARCHIVE_NAME}"
-        REPORT_DIR="$REPORT_DIR" LEG_DIR="$LEG_DIR" SUBMISSION_NAME="$SUBMISSION_NAME" REPORT_PREFIX="$REPORT_PREFIX" ARCHIVE="$ARCHIVE" python3 - <<'PYEOF'
-        import io
-        import json
-        import os
-        import tarfile
-        from pathlib import Path
-
-        report_dir = Path(os.environ["REPORT_DIR"])
-        leg_dir = Path(os.environ["LEG_DIR"])
-        submission_name = os.environ["SUBMISSION_NAME"]
-        prefix = os.environ["REPORT_PREFIX"]
-        archive = Path(os.environ["ARCHIVE"])
-        objects = {}
-
-        def add(path, object_name):
-            path = Path(path)
-            if path.is_file():
-                objects[f"{prefix}/{object_name}"] = (path, None)
-
-        # Core and Tier A report objects from publish.py.
-        for name in ("report.json", "report.md", "scorecard.json", "certification.json", "skill-structure-validation.json"):
-            add(report_dir / name, name)
-        for name in ("security-scan.json", "security-scan.sarif", "skillmd-security-scan.json"):
-            add(report_dir / name, f"security_scans/{name}")
-        add(leg_dir / "skillmd-quality-scan.json", "security_scans/skillmd-quality-scan.json")
-
-        # Match publish.py's AEH run discovery and debug/aeh object layout.
-        reports_root = leg_dir / "reports"
-        roots = [report_dir] if report_dir.is_dir() else []
-        if reports_root.is_dir():
-            roots.extend(path for path in sorted(reports_root.iterdir()) if path.is_dir() and path != report_dir)
-        seen = set()
-        for root in roots:
-            for run_dir in sorted(root.iterdir()):
-                if not run_dir.is_dir() or not ((run_dir / "summary.yaml").is_file() or (run_dir / "run_result.json").is_file()):
-                    continue
-                if run_dir.resolve() in seen:
-                    continue
-                seen.add(run_dir.resolve())
-                for path in sorted(run_dir.rglob("*")):
-                    if path.is_file():
-                        add(path, f"debug/aeh/{run_dir.name}/{path.relative_to(run_dir).as_posix()}")
-
-        add(leg_dir / "_ai_review.json", "scaffolded/ai_review.json")
-
-        if not objects:
-            print("No MinIO report objects found; no OCI archive created")
-        else:
-            archive.parent.mkdir(parents=True, exist_ok=True)
-            with tarfile.open(archive, "w:gz") as tar:
-                for name, (path, content) in sorted(objects.items()):
-                    if content is None:
-                        tar.add(path, arcname=name, recursive=False)
-                    else:
-                        info = tarfile.TarInfo(name)
-                        info.size = len(content)
-                        tar.addfile(info, io.BytesIO(content))
-            print(f"Packaged {len(objects)} MinIO report object(s) into {archive}")
-        PYEOF
-
-    - name: attach-oci-reports
-      image: quay.io/konflux-ci/task-runner:3.3.0@sha256:0428af436f6942544009e38ef452a6b747e9ec79ab22fd402a3d59585984cf81
-      onError: continue
-      env:
-        - name: ENABLE_PERSISTENCE
-          value: $(params.enable-persistence)
-        - name: IMAGE_URL
-          value: $(params.image-url)
-        - name: IMAGE_DIGEST
-          value: $(params.image-digest)
-        - name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        if [ "$ENABLE_PERSISTENCE" != "true" ]; then
-          echo "Skipping OCI report attach: persistence disabled"
-          exit 0
-        fi
-        if [ -z "$IMAGE_URL" ] || [ -z "$IMAGE_DIGEST" ]; then
-          echo "No built image URL/digest supplied; skipping OCI report attach"
-          exit 0
-        fi
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        ARCHIVE_DIR="${LEG_DIR}/oci-artifacts"
-        ARCHIVE_NAME="${LEG_SLUG}-reports.tar.gz"
-        ARCHIVE="${ARCHIVE_DIR}/${ARCHIVE_NAME}"
-        if [ ! -s "$ARCHIVE" ]; then
-          echo "No MinIO report objects were packaged; skipping OCI report attach"
-          exit 0
-        fi
-        echo "Selecting registry auth for ${IMAGE_URL}"
-        select-oci-auth "$IMAGE_URL" > "$HOME/auth.json"
-        cd "$ARCHIVE_DIR"
-        echo "Attaching ${ARCHIVE_NAME} to ${IMAGE_URL}@${IMAGE_DIGEST}"
-        ATTACH_OUTPUT=$(retry oras attach --no-tty --registry-config "$HOME/auth.json" \
-          --artifact-type application/vnd.agentic-eval.reports.v1 \
-          "${IMAGE_URL}@${IMAGE_DIGEST}" \
-          "${ARCHIVE_NAME}:application/gzip" 2>&1) || { echo "$ATTACH_OUTPUT"; exit 1; }
-        echo "$ATTACH_OUTPUT"
-        ATTACH_DIGEST=$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's/^Digest: //p' | tail -n 1)
-        if [[ ! "$ATTACH_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-          echo "ERROR: oras attach did not report a valid artifact manifest digest"
-          exit 1
-        fi
-        printf '{"uri":"%s","digest":"%s","skill":"%s"}' \
-          "$IMAGE_URL" "$ATTACH_DIGEST" "$SUBMISSION_DIR" \
-          > "$(results.skill-reports-ARTIFACT_OUTPUTS.path)"
-        echo "Report pull reference: ${IMAGE_URL}@${ATTACH_DIGEST} (skill=${SUBMISSION_DIR})"
-
-    # Persists results to Postgres/MinIO, gated on enable-persistence only
-    # (same as analyze-and-scorecard above). store_results.py handles the
-    # case where this leg has a scorecard.json but no report.json by
-    # persisting the gate/scorecard rows standalone.
-    - name: store
-      image: $(params.task-image)
-      env:
-        - name: DATABASE_URL
+          value: $(params.otel-exporter-endpoint)
+        - name: ABEVAL_LLM_API_KEY
           valueFrom:
             secretKeyRef:
-              name: ab-eval-db-credentials
+              name: $(params.llm-secret)
+              key: api-key
+              optional: true
+        - name: ABEVAL_AGENT_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: $(params.llm-secret)
+              key: api-key
+              optional: true
+        - name: ABEVAL_JUDGE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: $(params.llm-secret)
+              key: api-key
+              optional: true
+        - name: ABEVAL_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: $(params.database-secret)
               key: database-url
               optional: true
-        - name: DB_TLS_ROUTE_HOST
+        - name: ABEVAL_DATABASE_TLS_ROUTE_HOST
           valueFrom:
             secretKeyRef:
-              name: ab-eval-db-credentials
+              name: $(params.database-secret)
               key: database-tls-route-host
               optional: true
-        - name: MINIO_ENDPOINT
+        - name: ABEVAL_S3_ENDPOINT
           valueFrom:
             secretKeyRef:
-              name: minio-credentials
+              name: $(params.s3-secret)
               key: endpoint-url
               optional: true
-        - name: MINIO_ACCESS_KEY
+        - name: ABEVAL_S3_ACCESS_KEY
           valueFrom:
             secretKeyRef:
-              name: minio-credentials
+              name: $(params.s3-secret)
               key: root-user
               optional: true
-        - name: MINIO_SECRET_KEY
+        - name: ABEVAL_S3_SECRET_KEY
           valueFrom:
             secretKeyRef:
-              name: minio-credentials
+              name: $(params.s3-secret)
               key: root-password
               optional: true
         - name: MINIO_INSECURE_SSL
           valueFrom:
             secretKeyRef:
-              name: minio-credentials
+              name: $(params.s3-secret)
               key: insecure-skip-tls-verify
               optional: true
-        - name: SUBMISSION_DIR
+        - name: ABEVAL_COMPASS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: $(params.compass-secret)
+              key: token
+              optional: true
+        - name: SKILL_ID
           value: $(params.submission-dir)
-        - name: SUBMISSION_REVISION
-          value: $(params.submission-revision)
-        - name: ENABLE_PERSISTENCE
-          value: $(params.enable-persistence)
+        - name: EVALUATION_TIERS
+          value: $(params.tiers)
+      volumeMounts:
+        - name: aeh-kubeconfig
+          mountPath: /var/workload
+          readOnly: true
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ -s /var/trusted-ca/ca-bundle.crt ]; then
+          export SSL_CERT_FILE=/var/trusted-ca/ca-bundle.crt
+        fi
+        if [ "$(cat "$(steps.step-use-trusted-artifact.exitCode.path)")" != 0 ]; then
+          echo "Trusted source retrieval failed" >&2
+          exit 3
+        fi
+        abeval run --skill-id "$SKILL_ID" --source "$ABEVAL_SOURCE" \
+          --tiers "$EVALUATION_TIERS" --persist "$ABEVAL_PERSIST" \
+          --output "$ABEVAL_OUTPUT"
+    - name: package-oci-reports
+      image: registry.access.redhat.com/ubi9/python-311:latest
       onError: continue
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        if [ "$ENABLE_PERSISTENCE" != "true" ]; then
-          echo "Skipping: persistence disabled this run (enable-persistence=$ENABLE_PERSISTENCE, e.g. a PR build)"
-          exit 0
-        fi
-        # Same rationale as run-eval/analyze-and-scorecard above: a
-        # security-scan/skillmd-scan/quality-review failure does not skip
-        # store -- their findings are hard-gated independently, not a
-        # reason to withhold persisting this leg's eval/scorecard results.
-        if [ "$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-run-eval.exitCode.path)" 2>/dev/null || echo 0)" != "0" ] || \
-           [ "$(cat "$(steps.step-analyze-and-scorecard.exitCode.path)" 2>/dev/null || echo 0)" != "0" ]; then
-          echo "Skipping: an earlier step failed"
-          exit 0
-        fi
-        echo "=== STORE ==="
-        # See the header's REPORT_KEY INVARIANT note.
-        SUBMISSION_NAME=$(cat "${VARS_DIR}/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
-        # report-prefix is written by validate -- fall back to computing
-        # the same shape (timestamp_name_runid) here when validate didn't
-        # run this leg.
-        REPORT_PREFIX=$(cat "${VARS_DIR}/report-prefix" 2>/dev/null || echo "$(date -u +%Y%m%d_%H%M%S)_${SUBMISSION_NAME}_$(context.taskRun.name)")
-        PIPELINE_DIR="/opt/agent-eval-harness"
-        cd "$PIPELINE_DIR"
-        export PYTHONPATH="$PIPELINE_DIR"
-        REPORT_DIR="${LEG_DIR}/reports/$SUBMISSION_NAME"
-
-        if [ -n "${DB_TLS_ROUTE_HOST:-}" ]; then
-          echo "=== Starting local TLS tunnel to remote Postgres (${DB_TLS_ROUTE_HOST}) ==="
-          python3 - "$DB_TLS_ROUTE_HOST" <<'PY' &
-        import socket, ssl, sys, threading
-
-        route_host = sys.argv[1]
-        LISTEN_PORT = 5432
-
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
-        def relay(src, dst):
-            try:
-                while True:
-                    data = src.recv(65536)
-                    if not data:
-                        break
-                    dst.sendall(data)
-            except OSError:
-                pass
-            finally:
-                try:
-                    dst.shutdown(socket.SHUT_WR)
-                except OSError:
-                    pass
-
-        def handle(conn):
-            try:
-                raw = socket.create_connection((route_host, 443))
-                tls_conn = ctx.wrap_socket(raw, server_hostname=route_host)
-            except Exception as e:
-                print("tunnel: upstream TLS connect failed:", e, flush=True)
-                conn.close()
-                return
-            t1 = threading.Thread(target=relay, args=(conn, tls_conn), daemon=True)
-            t2 = threading.Thread(target=relay, args=(tls_conn, conn), daemon=True)
-            t1.start()
-            t2.start()
-            t1.join()
-            t2.join()
-            conn.close()
-            tls_conn.close()
-
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(("127.0.0.1", LISTEN_PORT))
-        listener.listen(20)
-        print(f"tunnel: listening on 127.0.0.1:{LISTEN_PORT} -> {route_host}:443", flush=True)
-        while True:
-            conn, _ = listener.accept()
-            threading.Thread(target=handle, args=(conn,), daemon=True).start()
-        PY
-          for _ in $(seq 1 20); do
-            python3 -c "import socket; socket.create_connection(('127.0.0.1',5432),1).close()" 2>/dev/null && break
-            sleep 0.5
-          done
-        fi
-
-        if [ -n "${DATABASE_URL:-}" ]; then
-          echo "Storing results for submission=$SUBMISSION_NAME run=$(context.taskRun.name)"
-          python scripts/store_results.py \
-            --report-dir "$REPORT_DIR" \
-            --run-id "$(context.taskRun.name)"
-        else
-          echo "DATABASE_URL not configured, skipping DB store"
-        fi
-
-        if [ -n "${MINIO_ENDPOINT:-}" ] && [ -n "${MINIO_ACCESS_KEY:-}" ] && [ -n "${MINIO_SECRET_KEY:-}" ]; then
-          echo "Publishing artifacts for submission=$SUBMISSION_NAME run=$(context.taskRun.name)"
-          python scripts/publish.py \
-            --report-dir "$REPORT_DIR" \
-            --submission-name "$SUBMISSION_NAME" \
-            --pipeline-run-id "$(context.taskRun.name)" \
-            --minio-bucket "ab-eval-reports" \
-            --eval-engine aeh \
-            --workspace-root "${LEG_DIR}" \
-            --report-prefix "$REPORT_PREFIX"
-        else
-          echo "MinIO credentials not available, skipping artifact upload"
-        fi
-        echo "=== Store complete ==="
-
-    # Emits both TEST_OUTPUT_TIER_A and TEST_OUTPUT_TIER_B. Always runs (final aggregator, no
-    # onError/skip-guard). Checks should-evaluate/is-changed first: if the
-    # chain was flag-skipped, every gated step above trivially exited 0,
-    # which would otherwise be misread as a genuine SUCCESS -- so this
-    # emits a "SKIPPED" sentinel instead. Otherwise checks every step's
-    # exit code, emitting "ERROR" on a genuine runtime failure, else a
-    # report/scorecard-derived SUCCESS/WARNING/FAILURE verdict. Always
-    # exits 0 itself.
-    - name: emit-results
-      image: $(params.task-image)
-      env:
-        - name: SUBMISSION_DIR
+      env: &id001
+        - &id002
+          name: IMAGE_URL
+          value: $(params.image-url)
+        - &id003
+          name: IMAGE_DIGEST
+          value: $(params.image-digest)
+        - &id004
+          name: SUBMISSION_DIR
           value: $(params.submission-dir)
-        - name: SHOULD_EVALUATE
-          value: $(params.should-evaluate)
+      script: |
+        #!/usr/bin/env python3
+        import os
+        import tarfile
+        from pathlib import Path
+
+        if os.environ["IMAGE_URL"] and os.environ["IMAGE_DIGEST"]:
+            run = Path(os.environ["ABEVAL_OUTPUT"])
+            if not (run / "run.json").is_file() or not (run / "reports").is_dir():
+                raise SystemExit("No evaluation evidence available for attachment")
+            with tarfile.open(run / "reports.tar.gz", "w:gz") as archive:
+                archive.add(run / "reports", arcname="reports")
+                archive.add(run / "run.json", arcname="run.json")
+    - name: attach-oci-reports
+      image: quay.io/konflux-ci/task-runner:3.3.0@sha256:0428af436f6942544009e38ef452a6b747e9ec79ab22fd402a3d59585984cf81
+      onError: continue
+      env: *id001
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        echo "=== EMIT KONFLUX TEST_OUTPUT_TIER_A + TEST_OUTPUT_TIER_B ==="
-
-        TIER_A_FAILED_STEP=""
-        TIER_A_FAILED_EXIT=""
-        for pair in \
-          "materialize-source:$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" \
-          "skill-structure-validation:$(cat "$(steps.step-skill-structure-validation.exitCode.path)" 2>/dev/null || echo 0)" \
-          "security-scan:$(cat "$(steps.step-security-scan.exitCode.path)" 2>/dev/null || echo 0)" \
-          "skillmd-scan:$(cat "$(steps.step-skillmd-scan.exitCode.path)" 2>/dev/null || echo 0)"
-        do
-          name="${pair%%:*}"
-          code="${pair##*:}"
-          if [ "$code" != "0" ] && [ -z "$TIER_A_FAILED_STEP" ]; then
-            TIER_A_FAILED_STEP="$name"
-            TIER_A_FAILED_EXIT="$code"
-          fi
-        done
-        TIER_A_FAILED_STEP="$TIER_A_FAILED_STEP" TIER_A_FAILED_EXIT="$TIER_A_FAILED_EXIT" SUBMISSION_DIR="$SUBMISSION_DIR" python3 - <<'PYEOF'
-        import datetime
+        if [ -z "$IMAGE_URL" ] || [ -z "$IMAGE_DIGEST" ]; then
+          exit 0
+        fi
+        ARCHIVE="${ABEVAL_OUTPUT}/reports.tar.gz"
+        if [ ! -s "$ARCHIVE" ]; then
+          echo "No report archive available for attachment" >&2
+          exit 1
+        fi
+        select-oci-auth "$IMAGE_URL" > "$HOME/auth.json"
+        cd "$ABEVAL_OUTPUT"
+        ATTACH_OUTPUT=$(retry oras attach --no-tty --registry-config "$HOME/auth.json" \
+          --artifact-type application/vnd.agentic-eval.reports.v1 \
+          "${IMAGE_URL}@${IMAGE_DIGEST}" \
+          "reports.tar.gz:application/gzip" 2>&1) || { echo "$ATTACH_OUTPUT"; exit 1; }
+        echo "$ATTACH_OUTPUT"
+        ATTACH_DIGEST=$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's/^Digest: //p' | tail -n 1)
+        if [[ ! "$ATTACH_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          echo "ORAS did not report a valid artifact digest" >&2
+          exit 1
+        fi
+        printf '{"uri":"%s","digest":"%s","skill":"%s"}' \
+          "$IMAGE_URL" "$ATTACH_DIGEST" "$SUBMISSION_DIR" \
+          > "$(results.skill-reports-ARTIFACT_OUTPUTS.path)"
+    - name: emit-results
+      image: registry.access.redhat.com/ubi9/python-311:latest
+      env:
+        - *id002
+        - *id003
+        - *id004
+        - name: EVALUATION_TIERS
+          value: $(params.tiers)
+        - name: EVALUATION_PERSIST
+          value: $(params.persist)
+        - name: ATTACH_EXIT_PATH
+          value: $(steps.step-attach-oci-reports.exitCode.path)
+        - name: TIER1_PATH
+          value: $(results.TEST_OUTPUT_TIER_A.path)
+        - name: TIER2_PATH
+          value: $(results.TEST_OUTPUT_TIER_B.path)
+        - name: PUBLICATION_PATH
+          value: $(results.TEST_OUTPUT_PUBLICATION.path)
+        - name: ARTIFACT_PATH
+          value: $(results.skill-reports-ARTIFACT_OUTPUTS.path)
+      script: |
+        #!/usr/bin/env python3
         import json
         import os
+        import re
+        from datetime import datetime, timezone
         from pathlib import Path
 
-        failed_step = os.environ.get("TIER_A_FAILED_STEP", "")
-        failed_exit = os.environ.get("TIER_A_FAILED_EXIT", "")
-        submission_dir = os.environ.get("SUBMISSION_DIR", "")
-        if failed_step:
-            result = "FAILURE"
-            note = f"{submission_dir}: step '{failed_step}' exited {failed_exit}"
-        else:
-            result = "SUCCESS"
-            note = f"{submission_dir}: materialize-source/skill-structure-validation/security-scan/skillmd-scan all passed"
-        successes, failures = (1, 0) if result == "SUCCESS" else (0, 1)
-        payload = {
-            "result": result,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "note": note,
-            "successes": successes,
-            "failures": failures,
-            "warnings": 0,
-        }
-        Path('$(results.TEST_OUTPUT_TIER_A.path)').write_text(json.dumps(payload))
-        print(json.dumps(payload))
-        PYEOF
+        stamp = datetime.now(timezone.utc).isoformat()
+        skill = os.environ["SUBMISSION_DIR"]
 
-        LEG_SLUG=$(printf '%s' "$SUBMISSION_DIR" | tr '/ ' '__')
-        LEG_DIR="$(workspaces.source.path)/legs/${LEG_SLUG}"
-        VARS_DIR="${LEG_DIR}/.baked-vars"
-        # See the header's REPORT_KEY INVARIANT note.
-        SUBMISSION_NAME=$(cat "$VARS_DIR/submission-name" 2>/dev/null || printf '%s' "$SUBMISSION_DIR")
-        REPORT_DIR="${LEG_DIR}/reports/${SUBMISSION_NAME}"
+        def output(state, note, successes=0, failures=0, warnings=0):
+            return dict(result=state, timestamp=stamp, note=note,
+                        successes=successes, failures=failures, warnings=warnings)
 
-        IS_CHANGED=$(cat "${VARS_DIR}/is-changed" 2>/dev/null || echo "false")
-        HAS_AEH_SUBMISSION=$(cat "${VARS_DIR}/has-aeh-submission" 2>/dev/null || echo "false")
-        if [ "$SHOULD_EVALUATE" != "true" ] || [ "$IS_CHANGED" != "true" ] || [ "$HAS_AEH_SUBMISSION" != "true" ]; then
-          echo "Not opted in for Tier B (LLM) evaluation this run (should-evaluate=$SHOULD_EVALUATE, is-changed=$IS_CHANGED, has-aeh-submission=$HAS_AEH_SUBMISSION) -- emitting SKIPPED"
-          SUBMISSION_DIR="$SUBMISSION_DIR" SHOULD_EVALUATE="$SHOULD_EVALUATE" IS_CHANGED="$IS_CHANGED" HAS_AEH_SUBMISSION="$HAS_AEH_SUBMISSION" python3 -c "
-        import json, datetime, os
-        from pathlib import Path
+        def project(steps, required, label):
+            by_name = {step["name"]: step for step in steps}
+            missing = required - by_name.keys()
+            selected = [by_name[name] for name in required if name in by_name]
+            invalid = [s["name"] for s in selected if s.get("status") not in {"completed", "error", "skipped"}
+                       or s.get("verdict") not in {"pass", "warn", "fail", "unavailable"}]
+            errors = [s["name"] for s in selected if s.get("blocking", True)
+                      and (s.get("status") in {"error", "skipped"} or s.get("verdict") == "unavailable")]
+            failed = [s["name"] for s in selected if s.get("blocking", True) and s.get("verdict") == "fail"]
+            problems = sorted(set(missing) | set(invalid + errors + failed))
+            state = "ERROR" if missing or invalid or errors else "FAILURE" if failed else "SUCCESS"
+            warnings = sum(s.get("verdict") == "warn" or
+                           (not s.get("blocking", True) and
+                       (s.get("status") != "completed" or s.get("verdict") == "fail")) for s in selected)
+            return output(state, label + (": " + ", ".join(problems) if problems else ": completed"),
+                          sum(s.get("status") == "completed" and s.get("verdict") in {"pass", "warn"} for s in selected),
+                          len(problems), warnings)
 
-        submission_dir = os.environ.get('SUBMISSION_DIR', '')
-        should_evaluate = os.environ.get('SHOULD_EVALUATE', '')
-        is_changed = os.environ.get('IS_CHANGED', '')
-        has_aeh_submission = os.environ.get('HAS_AEH_SUBMISSION', '')
+        try:
+            tiers = {int(value) for value in os.environ["EVALUATION_TIERS"].split(",")}
+            if not tiers or tiers - {1, 2}:
+                raise ValueError("Invalid tiers")
+        except ValueError:
+            tiers = {1, 2}
 
-        if has_aeh_submission != 'true':
-            note = (
-                f'{submission_dir}: no AEH submission committed for this skill '
-                f'(no submissions/{submission_dir}/metadata.yaml) -- Tier B (LLM) '
-                f'evaluation does not apply'
-            )
-        else:
-            note = (
-                f'{submission_dir}: Tier B (LLM) evaluation not applicable this run '
-                f'(should-evaluate={should_evaluate}, is-changed={is_changed})'
-            )
+        tier1 = output("SKIPPED", skill + ": Tier 1 not requested")
+        tier2 = output("SKIPPED", skill + ": Tier 2 not requested")
+        try:
+            run = json.loads((Path(os.environ["ABEVAL_OUTPUT"]) / "run.json").read_text())
+            if run["schema_version"] != "1.0":
+                raise ValueError("Unsupported evidence schema")
+            steps = run["steps"]
+            if 1 in tiers:
+                required = {"prepare", "structure", "security", "quality", "report"}
+                if "skill-review" in run["requested_steps"]:
+                    required.add("skill-review")
+                tier1 = project(steps, required, skill + " Tier 1")
+            if 2 in tiers:
+                required = {"prepare", "submission", "evaluate", "report"}
+                if "submission-review" in run["requested_steps"]:
+                    required.add("submission-review")
+                tier2 = project(steps, required, skill + " Tier 2")
+            destinations = {v.strip() for v in os.environ["EVALUATION_PERSIST"].split(",") if v.strip()}
+            publication = project(run["publication"], destinations, skill + " publication")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            error = output("ERROR", skill + ": missing or invalid evaluation evidence", failures=1)
+            if 1 in tiers:
+                tier1 = error
+            if 2 in tiers:
+                tier2 = error
+            publication = error.copy()
 
-        payload = {
-            'result': 'SKIPPED',
-            'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'note': note,
-            'successes': 0,
-            'failures': 0,
-            'warnings': 0,
-        }
-        print(json.dumps(payload))
-        Path('$(results.TEST_OUTPUT_TIER_B.path)').write_text(json.dumps(payload))
-        "
-          echo "=== TEST_OUTPUT_TIER_B emitted (SKIPPED) ==="
-          exit 0
-        fi
+        artifact_path = Path(os.environ["ARTIFACT_PATH"])
+        artifact = dict(uri="", digest="", skill=skill)
+        attachment_requested = bool(os.environ["IMAGE_URL"] or os.environ["IMAGE_DIGEST"])
+        if attachment_requested:
+            try:
+                artifact = json.loads(artifact_path.read_text())
+                if (artifact["uri"] != os.environ["IMAGE_URL"] or artifact["skill"] != skill
+                        or not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["digest"])
+                        or Path(os.environ["ATTACH_EXIT_PATH"]).read_text().strip() != "0"):
+                    raise ValueError("Invalid OCI attachment result")
+                publication["successes"] += 1
+            except (OSError, ValueError, KeyError, TypeError):
+                artifact = dict(uri="", digest="", skill=skill)
+                publication["result"] = "ERROR"
+                publication["failures"] += 1
+                publication["note"] += "; OCI evidence attachment failed"
 
-        FAILED_STEP=""
-        FAILED_EXIT=""
-        # security-scan/skillmd-scan are excluded: their hard-fail verdict
-        # is reported via TEST_OUTPUT_TIER_A above, not here -- a
-        # security-scan/skillmd-scan failure must not masquerade as a Tier
-        # B runtime error and hide the real eval/scorecard verdict.
-        for pair in \
-          "materialize-source:$(cat "$(steps.step-materialize-source.exitCode.path)" 2>/dev/null || echo 0)" \
-          "validate:$(cat "$(steps.step-validate.exitCode.path)" 2>/dev/null || echo 0)" \
-          "quality-review:$(cat "$(steps.step-quality-review.exitCode.path)" 2>/dev/null || echo 0)" \
-          "run-eval:$(cat "$(steps.step-run-eval.exitCode.path)" 2>/dev/null || echo 0)" \
-          "analyze-and-scorecard:$(cat "$(steps.step-analyze-and-scorecard.exitCode.path)" 2>/dev/null || echo 0)" \
-          "store:$(cat "$(steps.step-store.exitCode.path)" 2>/dev/null || echo 0)"
-        do
-          name="${pair%%:*}"
-          code="${pair##*:}"
-          if [ "$code" != "0" ] && [ -z "$FAILED_STEP" ]; then
-            FAILED_STEP="$name"
-            FAILED_EXIT="$code"
-          fi
-        done
-        if [ -n "$FAILED_STEP" ]; then
-          echo "Runtime error detected: step '$FAILED_STEP' exited $FAILED_EXIT"
-        fi
-
-        FAILED_STEP="$FAILED_STEP" FAILED_EXIT="$FAILED_EXIT" python3 -c "
-        import json, datetime, os
-        from pathlib import Path
-
-        failed_step = os.environ.get('FAILED_STEP', '')
-        failed_exit = os.environ.get('FAILED_EXIT', '')
-
-        if failed_step:
-            result = 'ERROR'
-            note = f\"Runtime error: step '{failed_step}' exited {failed_exit} before evaluation completed\"
-        else:
-            report_dir = Path('$REPORT_DIR')
-            scorecard = report_dir / 'scorecard.json'
-            report = report_dir / 'report.json'
-
-            if scorecard.is_file():
-                sc = json.loads(scorecard.read_text())
-                rec = sc.get('recommendation', 'fail')
-                result = {'pass': 'SUCCESS', 'warn': 'WARNING', 'fail': 'FAILURE'}.get(rec, 'ERROR')
-                note = (
-                    f\"Agentic Eval Flow: recommendation={rec}, \"
-                    f\"certification={sc.get('highest_certification', 'none')}, \"
-                    f\"gates_passed={sc.get('gates_passed', 0)}, gates_failed={sc.get('gates_failed', 0)}\"
-                )
-            elif report.is_file():
-                r = json.loads(report.read_text())
-                rec = r.get('summary', {}).get('recommendation', 'fail')
-                result = {'pass': 'SUCCESS', 'fail': 'FAILURE'}.get(rec, 'ERROR')
-                note = f'Agentic Eval Flow: recommendation={rec} (no scorecard)'
-            else:
-                result = 'FAILURE'
-                note = 'Agentic Eval Flow: no scorecard.json or report.json found'
-
-        counts = {'SUCCESS': (1, 0, 0), 'WARNING': (0, 0, 1), 'FAILURE': (0, 1, 0), 'ERROR': (0, 1, 0)}
-        successes, failures, warnings = counts.get(result, (0, 1, 0))
-
-        payload = {
-            'result': result,
-            'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'note': note,
-            'successes': successes,
-            'failures': failures,
-            'warnings': warnings,
-        }
-        print(json.dumps(payload))
-        Path('$(results.TEST_OUTPUT_TIER_B.path)').write_text(json.dumps(payload))
-        "
-        echo "=== TEST_OUTPUT_TIER_B emitted ==="
+        for name, payload in [("TIER1_PATH", tier1), ("TIER2_PATH", tier2),
+                              ("PUBLICATION_PATH", publication), ("ARTIFACT_PATH", artifact)]:
+            Path(os.environ[name]).write_text(json.dumps(payload))

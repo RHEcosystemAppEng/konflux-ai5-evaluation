@@ -158,7 +158,18 @@ for ITEM in "${TEST_ITEMS[@]}"; do
       sleep 5
     done
 
-    PIPELINERUN=$(tkn p start "$TEST_NAME" -n "${TEST_NS}" -w name=tests-workspace,volumeClaimTemplateFile="$WORKSPACE_TEMPLATE"  -o json | jq -r '.metadata.name')
+    PARAM_ARGS=()
+    if [ -n "${TASK_TEST_PARAMS_FILE:-}" ]; then
+      jq -e 'type == "object" and all(.[]; type == "string")' "$TASK_TEST_PARAMS_FILE" >/dev/null
+      while IFS= read -r PARAM_NAME; do
+        if PARAM_VALUE=$(jq -er --arg key "$PARAM_NAME" '.[$key] // empty' "$TASK_TEST_PARAMS_FILE"); then
+          PARAM_ARGS+=(--param "$PARAM_NAME=$PARAM_VALUE")
+        fi
+      done < <(yq -r '.spec.params // [] | .[].name' "$TEST_PATH")
+    fi
+    PIPELINERUN=$(tkn p start "$TEST_NAME" -n "${TEST_NS}" \
+      -w name=tests-workspace,volumeClaimTemplateFile="$WORKSPACE_TEMPLATE" \
+      "${PARAM_ARGS[@]}" -o json | jq -r '.metadata.name')
     echo "INFO: Started pipelinerun: $PIPELINERUN"
     sleep 1  # allow a second for the prun object to appear (including a status condition)
     while [ "$(${KUBECTL_CMD} get pr "$PIPELINERUN" -n "${TEST_NS}" -o=jsonpath='{.status.conditions[0].status}')" == "Unknown" ]; do

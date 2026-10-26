@@ -1,0 +1,23 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-aggregate-fanout-error
+  annotations:
+    test/assert-task-failure: aggregate
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: Provided by the test runner; unused.
+  tasks:
+    - name: aggregate
+      taskRef:
+        name: aggregate-fanout-result
+      params:
+        - name: changed-skills
+          value:
+            - demo
+        - name: eval-outcomes
+          value:
+            - not-json
+        - name: fail-on-non-success
+          value: 'true'

@@ -1,17 +1,3 @@
-# Aggregates a fanned-out Matrix's per-item results (e.g. from a Task like
-# aeh-skill-eval, one leg per catalog item) into one standardized Konflux
-# TEST_OUTPUT, via a caller-supplied aggregation script (default
-# scripts/aggregate_fanout_result.py). Set fail-on-non-success to "true" to
-# use this as a hard gate (fails the pipeline when the aggregated result
-# isn't SUCCESS); leave it "false" (the default) to stay purely
-# informational.
-#
-# Already fully generic: consumes its caller's own trusted Source Artifact
-# (not a hardcoded repository), so it is reusable as-is by any Konflux
-# pipeline whose Source Artifact contains an aggregation script at
-# aggregate-script-path with this CLI contract:
-#   <script> --changed-skills <id>... --eval-outcomes <json>... \
-#     --should-evaluate <bool> [--fail-on-non-success] --output <path>
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -19,95 +5,70 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/version: 1.0.0
 spec:
   description: >-
-    Aggregates an array of per-item evaluation outcomes into one
-    standardized Konflux TEST_OUTPUT result, optionally hard-failing the
-    pipeline if the aggregated result isn't SUCCESS.
+    Aggregate aligned Matrix TEST_OUTPUT JSON inline using Python. SKIPPED legs
+    are excluded; malformed, duplicate, or mismatched inputs produce ERROR.
   params:
-    - name: SOURCE_ARTIFACT
-      type: string
-      description: >-
-        Trusted Source Artifact (e.g. clone-repository's SOURCE_ARTIFACT
-        result) containing aggregate-script-path at the revision being
-        built.
-    - name: aggregate-script-path
-      type: string
-      default: "scripts/aggregate_fanout_result.py"
-      description: >-
-        Path, relative to the Source Artifact's root, of the aggregation
-        script to run. See this Task's description for its CLI contract.
-    - name: should-evaluate
-      type: string
-      default: "true"
-      description: >-
-        Only affects the note text in the trivial "nothing to evaluate"
-        case; passed straight through to aggregate-script-path.
     - name: changed-skills
       type: array
+      description: Skill identifiers aligned with eval-outcomes.
       default: []
-      description: Item identifiers, same order as eval-outcomes.
     - name: eval-outcomes
       type: array
+      description: Per-skill TEST_OUTPUT JSON values.
       default: []
-      description: Per-item TEST_OUTPUT JSON strings, same order/length as changed-skills.
     - name: fail-on-non-success
       type: string
-      default: "false"
-      description: When "true", this Task exits non-zero if the aggregated result isn't SUCCESS.
+      description: Fail the task after writing a non-success result.
+      default: 'false'
   results:
     - name: TEST_OUTPUT
-      description: Standardized Konflux test output, aggregated across every item's result.
-  volumes:
-    - name: workdir
-      emptyDir: {}
+      description: Aggregated Konflux result.
   steps:
-    - name: use-trusted-artifact
-      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
-      volumeMounts:
-        - name: workdir
-          mountPath: /var/workdir
-      args:
-        - use
-        - $(params.SOURCE_ARTIFACT)=/var/workdir/source
     - name: aggregate
       image: registry.access.redhat.com/ubi9/python-311:latest
-      volumeMounts:
-        - name: workdir
-          mountPath: /var/workdir
-      env:
-        - name: AGGREGATE_SCRIPT_PATH
-          value: $(params.aggregate-script-path)
-      command: ["bash", "-c"]
-      # $0/$@ positional-array convention for the changed-skills/eval-outcomes
-      # array params -- keeps every $(params.*) substitution confined to a
-      # single argv element instead of interpolated into the script text.
+      command:
+        - python3
+        - -c
       args:
         - |
-          #!/usr/bin/env bash
-          set -euo pipefail
-          FAIL_ON_NON_SUCCESS="$1"; shift
-          SHOULD_EVALUATE="$1"; shift
-          cd /var/workdir/source
-          FLAGS=()
-          if [ "$FAIL_ON_NON_SUCCESS" = "true" ]; then
-            FLAGS+=(--fail-on-non-success)
-          fi
-          set +e
-          python3 "$AGGREGATE_SCRIPT_PATH" "$@" \
-            --should-evaluate "$SHOULD_EVALUATE" \
-            "${FLAGS[@]}" \
-            --output "$(results.TEST_OUTPUT.path)"
-          GATE_EXIT=$?
-          set -e
-          cat "$(results.TEST_OUTPUT.path)"
-          echo
-          exit "$GATE_EXIT"
-        - "bash"
-        - "$(params.fail-on-non-success)"
-        - "$(params.should-evaluate)"
-        - "--changed-skills"
-        - "$(params.changed-skills[*])"
-        - "--eval-outcomes"
-        - "$(params.eval-outcomes[*])"
+          import json, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          gate, target = sys.argv[1:3]
+          values = sys.argv[3:]
+          try:
+              if gate not in {"true", "false"} or values.count("--skills") != 1 or values.count("--outcomes") != 1:
+                  raise ValueError("Invalid arguments")
+              boundary = values.index("--outcomes")
+              if values[0] != "--skills":
+                  raise ValueError("Missing skills array")
+              skills, raw = values[1:boundary], values[boundary+1:]
+              if len(skills) != len(raw) or len(set(skills)) != len(skills):
+                  raise ValueError("Skill and outcome arrays must be unique and aligned")
+              states = [json.loads(item)["result"] for item in raw]
+              if any(state not in {"SUCCESS", "FAILURE", "ERROR", "WARNING", "SKIPPED"} for state in states):
+                  raise ValueError("Unknown outcome")
+              evaluated = [(skill, state) for skill, state in zip(skills, states) if state != "SKIPPED"]
+              failed = [skill for skill, state in evaluated if state != "SUCCESS"]
+              state = "FAILURE" if failed else "SUCCESS"
+              note = f"Evaluated {len(evaluated)} skill(s); {len(failed)} failed."
+              if failed:
+                  note += " Failed: " + ", ".join(failed[:10])
+              successes, failures = len(evaluated) - len(failed), len(failed)
+          except (ValueError, KeyError, TypeError, IndexError):
+              state, note, successes, failures = "ERROR", "Invalid or mismatched Matrix results", 0, 1
+          result = dict(result=state, timestamp=datetime.now(timezone.utc).isoformat(),
+                        note=note, successes=successes, failures=failures, warnings=0)
+          Path(target).write_text(json.dumps(result))
+          print(json.dumps(result))
+          sys.exit(2 if gate not in {"true", "false"} else int(gate == "true" and state != "SUCCESS"))
+        - $(params.fail-on-non-success)
+        - $(results.TEST_OUTPUT.path)
+        - --skills
+        - $(params.changed-skills[*])
+        - --outcomes
+        - $(params.eval-outcomes[*])

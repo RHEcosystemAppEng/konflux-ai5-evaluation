@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0
+
+### Changed
+
+- Run evaluation, fixture staging, scoring, reporting, and persistence through
+  one CLI invocation per Matrix leg, with explicit tiers and persistence inputs.
+- Use one complete evaluation image and a separate trial image for Tier 2;
+  inline result conversion uses standard Python and OCI attachment reuses the
+  existing Konflux task-runner. Configure model/storage credentials through Secrets.
+- Select publication destinations explicitly and expose their independent result.
+- Remove script paths, metadata parsing, custom TLS bypasses, and report packaging
+  from task scripts. See the CLI migration guide for parameter changes.
+
+
 ## Unreleased
 
 ### Skill structure validation and Compass fact (0.9.0)

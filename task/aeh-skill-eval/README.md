@@ -1,182 +1,117 @@
-# aeh-skill-eval task
+# aeh-skill-eval
 
-Runs a single catalog item's full evaluation as one Task, so a Tekton
-`Matrix` can fan out over it natively -- one `TaskRun` per item in the
-Matrix source array.
+Run a skill evaluation with explicit `tiers` and optional `persist` task
+parameters. A calling pipeline can expose the same parameters and forward them.
+The task passes them directly to one `abeval run` invocation.
 
-- **Tier A** (`materialize-source`/`skill-structure-validation`/`security-scan`/`skillmd-scan`)
-  always runs, regardless of any opt-in flag -- non-LLM structure, security,
-  and `SKILL.md` quality checks over the skill directory. Structure validation
-  errors fail Tier A; warnings remain advisory. `skill-structure-validation.json`
-  supplies certification and the standalone `valid-skill-structure` Compass
-  fact, including errors and warnings.
-- **Tier B** (`validate`/`quality-review`/`run-eval`) runs for a changed,
-  opted-in skill that has an AEH submission. Quality review is advisory.
-- **Persistence** (`analyze-and-scorecard`, OCI attachment, `store`) is
-  independently gated by `enable-persistence` and can persist Tier A-only
-  results when evaluation does not apply.
+## Steps and ownership
 
-This Task is already fully generic -- it needs purpose-specific images, params,
-and Secrets, with no coupling to any particular source repository (unlike
-`check-pr-label`/`discover-changed-skills`/`update-registered-shas`, which
-are GitLab-project-specific). It consumes its caller's trusted Source
-Artifact via `source-artifact`, never performs its own `git clone`.
+| Step | Responsibility |
+|---|---|
+| `use-trusted-artifact` | Retrieve the pipeline's trusted source snapshot. |
+| `evaluate` | Run `abeval run --tiers ... --persist ...`. The CLI stages source, validates, scans, reviews, runs AEH, reports, and persists. |
+| `package-oci-reports` | Archive reports and the run manifest using a standard Python image. |
+| `attach-oci-reports` | Reuse the existing Konflux task-runner with registry auth, retry, and ORAS. |
+| `emit-results` | Convert saved evidence inline using a standard Python image. |
 
-**No Trusted Artifacts (`-oci-ta`) variant**: this Task's `source` workspace
-is a Matrix-shared scratch PVC (every concurrent leg computes its own
-`legs/<slug>` subdirectory under it), not a hand-off of build artifacts
-between sequential pipeline Tasks -- see
-[.ta-ignore.yaml](../../.ta-ignore.yaml) in the repo root for the full
-rationale.
+There are no per-phase evaluation steps. The CLI owns operation ordering,
+dependencies, failure handling, reporting, and database/S3/Compass publication.
+Konflux owns source retrieval, workload credentials, image references, fanout,
+and the OCI subject and registry credentials used for evidence attachment.
 
-Emits two independent `TEST_OUTPUT` results so a caller can gate on Tier A
-(hard, always applicable) separately from Tier B (informational, "SKIPPED"
-when not applicable this run) -- see
-[aggregate-fanout-result](../aggregate-fanout-result/README.md) for
-aggregating these across every Matrix leg. One final `emit-results` step
-writes both result files.
+## Tier and persistence parameters
 
-Safe for concurrent Matrix legs sharing one workspace: every step except
-the final `emit-results` uses `onError: continue` plus a cascading
-skip-guard, so one leg's runtime failure never fails that leg's `TaskRun`
-(and so never disrupts sibling legs or downstream aggregator Tasks).
-`quality-review` also writes the token metrics checkpoint consumed by
-`store`, avoiding a standalone bookkeeping step.
+- `tiers=1` runs static structure, security, and quality checks.
+- `tiers=2` runs AEH submission validation/review and trials.
+- `tiers=1,2` runs both tiers sequentially.
+- `persist=postgres,s3,compass` enables the selected application destinations;
+  empty disables them. Credentials alone do not enable publication.
+- `image-url` plus `image-digest` independently enable Konflux OCI evidence
+  attachment. Leave both empty to skip it.
 
-When persistence is enabled and the caller supplies a built image URL and
-digest, `package-oci-reports` prepares the same report objects uploaded to
-MinIO and `attach-oci-reports` attaches them as an OCI artifact to that image
-digest before `store` writes to Postgres/MinIO. The OCI archive uses the
-`application/vnd.agentic-eval.reports.v1` artifact type. Persistence-disabled
-callers (including pull request builds) skip this upload.
+No label or changed-skill selection is hidden in the task or CLI. The pipeline
+selects which skills run and passes their requested tiers. A requested Tier 2
+without a submission is an error. Submission metadata owns single/pairwise mode,
+review policy, config filenames, models, thresholds, fixtures, and Compass facts.
 
-Each Matrix leg emits `skill-reports-ARTIFACT_OUTPUTS`, an object with
-`uri`, `digest`, and `skill` fields. When a report is attached, `uri` is the
-image repository and `digest` is the manifest digest printed by `oras attach`;
-combine them as `${uri}@${digest}` to pull the report archive:
+## Runtime images
 
-```sh
-oras pull --registry-config /path/to/auth.json -o ./report \
-  "${uri}@${digest}"
-```
+`evaluation-image` contains the CLI, both scanners in isolated Python environments,
+unchanged upstream AEH, Harbor/Kubernetes, and model/storage clients. `aeh-image`
+is required only for Tier 2 trial pods. These are the two project-owned images.
 
-The object result uses Tekton Chains' `*ARTIFACT_OUTPUTS` type hint, allowing
-Chains to record the attached report artifact for the individual skill's
-TaskRun. The `skill` field identifies the Matrix leg. The result is emitted
-only when an archive was successfully attached; legs that skip attachment
-have no report artifact result.
+Evidence packaging, result conversion, and aggregation use the standard Red Hat
+Python image. OCI attachment reuses the existing digest-pinned Konflux task-runner
+and its `select-oci-auth`, `retry`, and `oras` tools. There is no utility image or
+OCI client in the CLI. No packages are installed at TaskRun startup.
 
 ## Parameters
 
-| name | description | default value | required |
-|---|---|---|---|
-| submission-dir | Catalog item identifier in `submission_dir` form (e.g. `rh-sre/cve-impact`). The real on-disk pack directory is mechanically derived from this. | | true |
-| submission-revision | Commit SHA of the repo being evaluated. | | true |
-| source-artifact | The caller's own trusted Source Artifact for `submission-revision`, consumed via `use-trusted-artifact` since this Task's pod has no git credentials of its own. | | true |
-| image-url | Built component image repository to which this leg's OCI report artifact is attached. | `""` | false |
-| image-digest | Digest of the built component image to which this leg's OCI report artifact is attached. | `""` | false |
-| should-evaluate | Pipeline-wide (same value for every leg): `"true"` only when the Tier B (LLM) chain is opted in for this run. | `"false"` | false |
-| changed-skills | `array`. Full changed-skills array (same value for every leg, NOT a Matrix param); this leg's own `is-changed` flag is derived by membership check against this array. | `[]` | false |
-| enable-persistence | Independent of `should-evaluate`/`is-changed`: whether this leg should attempt `analyze-and-scorecard` (Compass Facts), OCI report attachment, and `store` (Postgres/MinIO). | `"false"` | false |
-| harness-eval-version | Pinned `harness-eval` version for deterministic `SKILL.md` scanning. | `"7.9.0"` | false |
-| llm-api-key | API key for the LLM used by `quality-review`/`run-eval`. | `"sk-dummy"` | false |
-| llm-api-base | Base URL of the LLM API. | `""` | false |
-| llm-model | LLM model name for `quality-review`. | `"gemini-2.5-flash"` | false |
-| aeh-mode | AEH evaluation mode: `single` or `pairwise`. | `"single"` | false |
-| task-image | Source preparation, validation, review, reporting, persistence, and result steps. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0.2-task@sha256:d9efe91218c9b615657788c5fadbfb93340ccd51d19ce63a753a81715e84cafa"` | false |
-| runner-image | AEH orchestration image for `run-eval`. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-runner@sha256:5fb940342c3c56cd25b5e80ae9684e4ad383bd62bb268083fa3840818a1ef76e"` | false |
-| security-scan-image | Cisco deterministic scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0.1-security-scan@sha256:98d0d70e69f5a8d812c9730adaf8ce9a8b1018b4c17b1f0ac027d90718d14b09"` | false |
-| skillmd-scan-image | Deterministic SKILL.md scanner image. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-skillmd-scan@sha256:5c35e22bfb5709941d93a88f1f0ecf4393779a9b77204be8ca26132d78311ad9"` | false |
-| aeh-image | Trial pod image containing Claude Code, the MCP mock server, and AEH's reward verifier. | `"quay.io/ecosystem-appeng/agent-eval-harness:v4.0-trial@sha256:c8fdca4740c811ea4e4d3dcd411c4d98161374934799df5a0370e06a4635e0b1"` | false |
-| aeh-model-override | Explicit model override for `run-eval` (auto-derived from the item's own eval config when empty). | `""` | false |
-| aeh-judge-model-override | Explicit judge-model override for `run-eval`. | `""` | false |
-| aeh-runner | AEH runner backend (`harbor`). | `"harbor"` | false |
-| aeh-control-config | Filename (within the submission) of the control eval config. | `"eval-control.yaml"` | false |
-| aeh-treatment-config | Filename (within the submission) of the treatment eval config. | `"eval-treatment.yaml"` | false |
-| aeh-kubeconfig-secret | Name of an optional Secret holding a kubeconfig for a remote evaluation cluster. | `"agentic-plugins-konflux-sa-kubeconfig"` | false |
-| workload-namespace | Kubernetes namespace on the (remote or in-cluster) evaluation cluster to run the workload in. | `"agentic-plugins-evaluation"` | false |
-| otel-exporter-endpoint | Optional OTLP gRPC endpoint for tracing (Tier B chain only); inert when empty. | `""` | false |
-| mock-mcp-binary | Path to the generic mock-MCP-server entrypoint baked into the trial image, used by the `swap-mock-mcp` step for per-skill fixture-backed MCP mocking. | `"/opt/mock-mcp/src/server.py"` | false |
+| Parameter | Default | Purpose |
+|---|---|---|
+| `submission-dir` | Required | Catalog skill identifier: <pack>/<skill>. |
+| `submission-revision` | Required | Evaluated source commit SHA. |
+| `source-artifact` | Required | Trusted source artifact for the evaluated revision. |
+| `evaluation-image` | Required | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
+| `tiers` | 1 | Evaluation tiers passed directly to the CLI: 1, 2, or 1,2. |
+| `aeh-image` | Unset / disabled | Trial image pullable by the workload cluster; required for Tier 2. |
+| `persist` | Unset / disabled | Optional evaluation persistence: postgres,s3,compass. OCI evidence attachment is controlled by image-url and image-digest. |
+| `persistence-required` | true | Treat selected publication failures as errors. |
+| `image-url` | Unset / disabled | Built component image repository for OCI report attachment. |
+| `image-digest` | Unset / disabled | Built component image digest for OCI report attachment. |
+| `llm-secret` | llm-credentials | Konflux Secret containing api-key for local review and suite-level judging. |
+| `llm-api-base` | Unset / disabled | OpenAI-compatible review and judge endpoint, normally ending in /v1. |
+| `llm-model` | gemini-2.5-flash | Submission and optional skill review model. |
+| `agent-api-base` | Unset / disabled | Agent provider endpoint; for Claude through LiteLLM use the gateway root. |
+| `skill-review` | false | Enable advisory LLM skill review for every leg. |
+| `submission-review` | auto | auto honors submission metadata; also accepts on or off. |
+| `continue-on-tier1-failure` | false | Run selected trials despite blocking static findings. |
+| `aeh-model-override` | Unset / disabled | Override submission agent model. |
+| `aeh-judge-model-override` | Unset / disabled | Override submission judge model. |
+| `aeh-kubeconfig-secret` | agentic-plugins-konflux-sa-kubeconfig | Konflux Secret containing workload kubeconfig under key kubeconfig. |
+| `workload-namespace` | agentic-plugins-evaluation | Namespace on the workload cluster. |
+| `workload-credentials-secret` | llm-credentials | Existing workload Secret with native provider SDK environment keys. |
+| `workload-service-account` | Unset / disabled | Trial service account; empty uses native AEH defaults. |
+| `database-secret` | ab-eval-db-credentials | Konflux Secret with database-url and optional database-tls-route-host. |
+| `s3-secret` | minio-credentials | Konflux Secret with endpoint-url, root-user, root-password, optional insecure-skip-tls-verify. |
+| `s3-bucket` | ab-eval-reports | S3 publication bucket. |
+| `compass-secret` | compass-facts-api | Konflux Secret containing token. |
+| `ca-bundle-configmap` | trusted-ca-bundle | Optional Konflux ConfigMap with trusted CA bundle at ca-bundle.crt. |
+| `otel-exporter-endpoint` | Unset / disabled | Optional OTLP/gRPC collector endpoint. |
 
-## Results
+## Results and workspace
 
-| name | description |
+| Result | Meaning |
 |---|---|
-| TEST_OUTPUT_TIER_A | Standardized Konflux test output derived only from `materialize-source`/`skill-structure-validation`/`security-scan`/`skillmd-scan` -- the hard gate. |
-| TEST_OUTPUT_TIER_B | Standardized Konflux test output derived from the Tier B (LLM) chain when it actually ran this leg; `{"result": "SKIPPED", ...}` otherwise. |
-| skill-reports-ARTIFACT_OUTPUTS | Per-skill OCI report artifact object (`uri`, `digest`, `skill`), type-hinted for automatic Tekton Chains collection. |
+| `TEST_OUTPUT_TIER_A` | Tier 1 SUCCESS, FAILURE, or ERROR; SKIPPED when not requested. |
+| `TEST_OUTPUT_TIER_B` | Tier 2 SUCCESS, FAILURE, or ERROR; SKIPPED when not requested. |
+| `TEST_OUTPUT_PUBLICATION` | Independent status of selected persistence and OCI attachment. |
+| `skill-reports-ARTIFACT_OUTPUTS` | `{uri,digest,skill}` for the OCI referrer; empty uri/digest when absent. |
 
-## Workspaces
+Task steps allow result emission after a failure; gate result content rather
+than TaskRun success. Missing selected evidence produces ERROR. Aggregate the
+publication result when those destinations are required.
+The `source` workspace stores isolated runs at `runs/<taskrun-name>`. Matrix legs
+can share it. Source copies and kubeconfigs are excluded from report uploads.
 
-| name | description |
+## Credentials
+
+| Parameter | Secret keys / location |
 |---|---|
-| source | Shared across ALL concurrent Matrix legs (one leg per item). Each step computes its own `legs/<slug>` subdirectory first. |
+| `llm-secret` | Konflux `api-key` for local review and suite judging. |
+| `aeh-kubeconfig-secret` | Konflux `kubeconfig` for workload access. |
+| `workload-credentials-secret` | Existing workload-namespace Secret with native SDK keys, such as `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`. |
+| `database-secret` | Konflux `database-url`; optional `database-tls-route-host`. |
+| `s3-secret` | Konflux `endpoint-url`, `root-user`, `root-password`; optional `insecure-skip-tls-verify`. |
+| `compass-secret` | Konflux `token`. |
 
-## Secrets
+Registry authentication is selected by the existing Konflux `select-oci-auth`
+helper. No registry Secret or file is configured through the application.
+The optional CA ConfigMap supplies
+`ca-bundle.crt`, including public and private roots for controller clients.
+Workload CAs must separately exist in the trial image or workload configuration.
+TLS verification remains enabled. Selecting a destination without credentials
+records a publication error.
 
-| Secret (param) | Key | Required | Purpose |
-|---|---|---|---|
-| `aeh-kubeconfig-secret` (default `agentic-plugins-konflux-sa-kubeconfig`) | `kubeconfig` | optional | Kubeconfig for a remote evaluation cluster (`run-eval`); when absent, evaluation runs against the Task's own in-cluster credentials. |
-| `compass-facts-api` | `token` | optional | API token for pushing Compass Facts (`analyze-and-scorecard`). |
-| `ab-eval-db-credentials` | `database-url`, `database-tls-route-host` | optional | Postgres connection string / TLS tunnel route host for persisting results (`store`). |
-| `minio-credentials` | `endpoint-url`, `root-user`, `root-password`, `insecure-skip-tls-verify` (optional key) | optional | MinIO/S3 credentials for publishing report artifacts (`store`). Set `insecure-skip-tls-verify: "1"` when `endpoint-url` is only reachable through a Route/Ingress with a self-signed or internal-CA certificate. |
-| `llm-credentials` *(indirect)* | n/a | n/a | Not a `secretKeyRef` on this Task -- `run-eval` sets `AGENT_EVAL_K8S_CREDENTIALS_SECRET=llm-credentials` so the harness's own remote-workload runner knows which Secret name to use on the target evaluation cluster. |
-
-No ConfigMaps are used by this Task.
-
-## Image release and usage
-
-Version `0.9.0` uses the digest-pinned runtime images listed in the parameter
-table: `v4.0.2-task`, `v4.0.1-security-scan`, and `v4.0` for the runner, trial,
-and SKILL.md scanner. Callers overriding `AEH_IMAGE` must select the `-trial`
-image. Workload credentials come from the target cluster's `llm-credentials`
-secret.
-
-The existing Konflux trusted-artifact and ORAS steps use their own images.
-Runtime steps do not install Python dependencies. `aeh-image` is the trial
-image; `runner-image` is the image executing the orchestration step.
-
-The example below resolves the published `0.9.0` bundle by digest.
-
-```yaml
-- name: evaluate-skill
-  runAfter:
-  - discover-changed-skills
-  - build-image-index
-  matrix:
-    params:
-    - name: submission-dir
-      value: $(tasks.discover-changed-skills.results.changed-skills[*])
-  taskRef:
-    resolver: bundles
-    params:
-    - name: name
-      value: aeh-skill-eval
-    - name: bundle
-      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.9.0@sha256:12740149e61adf2008a7d346839d3fc50bf534625925008fb92066b19540af60
-    - name: kind
-      value: task
-  params:
-  - name: submission-revision
-    value: $(params.revision)
-  - name: source-artifact
-    value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
-  - name: image-url
-    value: $(tasks.build-image-index.results.IMAGE_URL)
-  - name: image-digest
-    value: $(tasks.build-image-index.results.IMAGE_DIGEST)
-  - name: should-evaluate
-    value: $(tasks.check-pr-label.results.should-evaluate)
-  - name: changed-skills
-    value: $(tasks.discover-changed-skills.results.changed-skills[*])
-  - name: enable-persistence
-    value: "true"
-  workspaces:
-  - name: source
-    workspace: shared-workspace
-```
-
-Then aggregate every leg's results with
-[aggregate-fanout-result](../aggregate-fanout-result/README.md) -- see
-[docs/examples/skills-evaluation-usage.md](../../docs/examples/skills-evaluation-usage.md)
-for the full end-to-end wiring.
+See [pipeline parameter forwarding](../../docs/examples/skills-evaluation-usage.md)
+and [migration](../../docs/migration-cli.md).

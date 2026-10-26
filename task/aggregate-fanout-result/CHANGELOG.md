@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0
+
+### Changed
+
+- Aggregate results inline with structured JSON validation on a standard Python image.
+- Remove source extraction and caller-provided aggregation scripts.
+- Remove `SOURCE_ARTIFACT`, `aggregate-script-path`, and `should-evaluate` inputs;
+  no application image is required.
+
+
 ## Unreleased
 
 *Nothing yet.*
