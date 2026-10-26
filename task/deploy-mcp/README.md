@@ -6,8 +6,6 @@ be pre-cloned into the workspace at `_mcp-server-repo`. Copies required
 image pull and credential Secrets from the pipeline namespace to the
 ephemeral namespace before deployment.
 
-Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_eval_flow).
-
 ## Parameters
 
 | name | description | default value | required |
@@ -55,7 +53,7 @@ Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_e
     - name: name
       value: deploy-mcp
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/deploy-mcp:0.1.0"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/deploy-mcp:0.1.0@sha256:497dd68018844303b9e98b245e98b74a727cc9738be9a128f8639c3bec57b898"
     - name: kind
       value: task
   params:

@@ -5,8 +5,6 @@ server. Runs as a Kubernetes Job on the target cluster. Tests tool
 correctness, edge-case handling, and sensitive data redaction using
 configurable task suites.
 
-Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_eval_flow).
-
 ## Parameters
 
 | name | description | default value | required |
@@ -57,7 +55,7 @@ Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_e
     - name: name
       value: mcp-behavioral-eval
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-behavioral-eval:0.1.0"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-behavioral-eval:0.1.0@sha256:d351effabf4f6e6bde44feec370eae8abec13d81cdc13bf5104b6d247c1040ee"
     - name: kind
       value: task
   params:

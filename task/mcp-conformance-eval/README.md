@@ -5,8 +5,6 @@ No LLM. Probes the server over Streamable HTTP for protocol, schema, and
 HTTP conformance using a three-state model (pass/fail/not_evaluated). Runs
 probes as a Kubernetes Job on the target cluster.
 
-Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_eval_flow).
-
 ## Parameters
 
 | name | description | default value | required |
@@ -53,7 +51,7 @@ Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_e
     - name: name
       value: mcp-conformance-eval
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-conformance-eval:0.1.0"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-conformance-eval:0.1.0@sha256:f5cee29ac503b77ca238fdec35de4a953dde3850cd052b948ebf3d5d85bf047b"
     - name: kind
       value: task
   params:

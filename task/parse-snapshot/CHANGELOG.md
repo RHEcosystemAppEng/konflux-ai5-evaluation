@@ -8,5 +8,5 @@
 
 ### Added
 
-- Initial version, migrated from agentic_eval_flow repository.
+- Initial version.
 - Parses a Konflux Snapshot JSON to extract component image, git URL, revision, and name.

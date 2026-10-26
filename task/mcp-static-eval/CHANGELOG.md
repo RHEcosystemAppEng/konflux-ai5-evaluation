@@ -8,5 +8,5 @@
 
 ### Added
 
-- Initial version, migrated from agentic_eval_flow repository.
+- Initial version.
 - Runs three static checks (gitleaks, semgrep, licensee) against MCP server source.

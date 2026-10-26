@@ -3,8 +3,7 @@ kind: Task
 metadata:
   name: parse-snapshot
   labels:
-    app.kubernetes.io/name: abevalflow
-    app.kubernetes.io/component: konflux
+    app.kubernetes.io/version: "0.1.0"
 spec:
   description: >-
     Parses a Konflux Snapshot JSON to extract the component container image,

@@ -3,8 +3,7 @@ kind: Task
 metadata:
   name: mcp-static-eval
   labels:
-    app.kubernetes.io/name: abevalflow
-    app.kubernetes.io/component: konflux
+    app.kubernetes.io/version: "0.1.0"
 spec:
   description: >-
     MCP static evaluation - build-time analysis (ADR Approach 4).

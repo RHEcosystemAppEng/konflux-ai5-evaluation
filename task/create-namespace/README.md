@@ -6,8 +6,6 @@ Intended to be cleaned up by
 [teardown-namespace](../teardown-namespace/README.md) in the pipeline's
 `finally` block.
 
-Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_eval_flow).
-
 ## Parameters
 
 | name | description | default value | required |
@@ -37,7 +35,7 @@ Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_e
     - name: name
       value: create-namespace
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/create-namespace:0.1.0"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/create-namespace:0.1.0@sha256:1f2e332a73461850dee78f4cb79a0185b634548890af8f1fefd298e8ed0197d4"
     - name: kind
       value: task
   params:

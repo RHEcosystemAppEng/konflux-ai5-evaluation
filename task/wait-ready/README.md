@@ -5,8 +5,6 @@ complete rollout, then verifies every pod is Ready. Fails if no workloads
 appear, rollout doesn't complete within the timeout, or pods are in an
 error state.
 
-Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_eval_flow).
-
 ## Parameters
 
 | name | description | default value | required |
@@ -37,7 +35,7 @@ Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_e
     - name: name
       value: wait-ready
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/wait-ready:0.1.0"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/wait-ready:0.1.0@sha256:56c98ed0e7a75f393a1bfabdb1247cd4c060698b3f7cf2bd04e2feb91cc45767"
     - name: kind
       value: task
   params:

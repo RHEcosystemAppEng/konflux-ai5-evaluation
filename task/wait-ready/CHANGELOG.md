@@ -8,5 +8,5 @@
 
 ### Added
 
-- Initial version, migrated from agentic_eval_flow repository.
+- Initial version.
 - Waits for all Deployments and StatefulSets to complete rollout and verifies pod readiness.

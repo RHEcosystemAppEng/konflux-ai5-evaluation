@@ -8,5 +8,5 @@
 
 ### Added
 
-- Initial version, migrated from agentic_eval_flow repository.
+- Initial version.
 - LLM-driven behavioral evaluation using mcpchecker against a deployed MCP server.

@@ -3,8 +3,7 @@ kind: Task
 metadata:
   name: create-namespace
   labels:
-    app.kubernetes.io/name: abevalflow
-    app.kubernetes.io/component: konflux
+    app.kubernetes.io/version: "0.1.0"
 spec:
   description: >-
     Creates an ephemeral namespace for MCP server evaluation on a remote

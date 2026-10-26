@@ -8,5 +8,5 @@
 
 ### Added
 
-- Initial version, migrated from agentic_eval_flow repository.
+- Initial version.
 - Deletes the ephemeral evaluation namespace with mcp-eval-* prefix safety check.

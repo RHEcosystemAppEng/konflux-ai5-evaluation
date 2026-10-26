@@ -5,8 +5,6 @@ secrets management (gitleaks), no user-provided code execution (semgrep),
 and license compliance (licensee). Resolves to pass/fail only -- no LLM,
 no deployment required.
 
-Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_eval_flow).
-
 ## Parameters
 
 | name | description | default value | required |
@@ -39,7 +37,7 @@ Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_e
     - name: name
       value: mcp-static-eval
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-static-eval:0.1.0"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-static-eval:0.1.0@sha256:3f1f1ed30201b341e2fc9b249387fd4fbb24d6e05e4904327966326fbe0c38ef"
     - name: kind
       value: task
   params:

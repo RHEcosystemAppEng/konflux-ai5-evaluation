@@ -4,8 +4,6 @@ Parses a Konflux Snapshot JSON to extract the component image, git URL,
 revision, and component name. Bridges the Konflux Snapshot model with
 parameter-based pipeline tasks.
 
-Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_eval_flow).
-
 ## Parameters
 
 | name | description | default value | required |
@@ -32,7 +30,7 @@ Migrated from [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_e
     - name: name
       value: parse-snapshot
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/parse-snapshot:0.1.0"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/parse-snapshot:0.1.0@sha256:80d45308b0cba98f3a9d7b121077519ca948ff901473d8c13b6b19c35fa842a1"
     - name: kind
       value: task
   params:
