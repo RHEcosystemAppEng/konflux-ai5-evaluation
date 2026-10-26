@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.0
+
+### Changed
+
+- Replace per-skill fanout with one sequential CLI batch; preserve per-skill reports and persistence. Retry only native/command trial timeouts after scoped cleanup. Attach batch OCI evidence, emit bounded aggregates, and gate static/required publication after finalization.
+
+
 ## 1.0.0
 
 ### Changed

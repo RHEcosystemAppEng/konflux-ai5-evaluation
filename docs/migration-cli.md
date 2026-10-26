@@ -1,5 +1,33 @@
 # CLI task migration (1.0.0)
 
+## Sequential batch upgrade (evaluation 2.0.0, registration 1.0.0)
+
+Use the `v1.0.1-runner` image with CLI 0.4.0 and the versioned batch evaluation
+task. Replace the pipeline's Matrix and `submission-dir` with an ordinary
+`changed-skills` array parameter. Remove the three `aggregate-fanout-result`
+callers: the task now emits small aggregate Tier A, Tier B, and publication
+results, then enforces static and required-publication gates. Tier B remains
+informational. Per-skill evidence is in `batch.json`, child `run.json` files,
+and validated `summary.json`, avoiding large Tekton arrays.
+
+Upgrade registration together: replace `eval-outcomes` with `batch-manifest`
+and share one workspace across discovery, evaluation, and registration.
+Keep the mutable clone under `repo/` and trusted-source evaluation evidence under
+`runs/`; registration mounts only one PVC workspace. Register
+only explicit eligible skill IDs with matching source revisions; errors and
+unexecuted skills keep their previous SHAs. Suppress the new `[skip-evaluation]`
+bot marker; retaining suppression of historical `[skip-fanout]` commits is safe.
+
+The CLI owns sequential orchestration and bounded timeout-only AEH arm retries.
+Single-skill `abeval run`, plugin loading, scoring, reports, persistence, and
+per-tier policies remain unchanged. No PipelineRun concurrency limit is added.
+OCI now attaches one batch archive. The runner/trial images retain the same AEH
+pin. Rebuild/publish images and bundles, then update consumers to verified digests.
+See the [current example](examples/skills-evaluation-usage.md).
+
+The 1.0.0 migration below describes the previous release and its old interface.
+
+
 Use the CLI-based runtime images with the 1.0.0 evaluation and aggregation tasks.
 Older published bundles retain their existing interfaces. Do not mix the new
 images with script-based bundles: the compatibility scripts have been removed.

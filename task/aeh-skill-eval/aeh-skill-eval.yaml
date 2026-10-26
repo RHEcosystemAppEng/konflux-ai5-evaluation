@@ -5,16 +5,17 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/version: 2.0.0
 spec:
   description: >-
-    Run requested tiers and optional application persistence through one abeval
-    invocation. Use the existing Konflux task-runner for OCI evidence attachment
-    and standard Python images for inline result conversion.
+    Evaluate changed skills sequentially through one abeval batch invocation.
+    Preserve per-skill evidence and persistence; attach batch OCI evidence and
+    emit bounded aggregate results before enforcing static/publication gates.
   params:
-    - name: submission-dir
-      type: string
-      description: 'Catalog skill identifier: <pack>/<skill>.'
+    - name: changed-skills
+      type: array
+      default: []
+      description: 'Ordered catalog skill identifiers; an empty list is a successful no-op.'
     - name: submission-revision
       type: string
       description: Evaluated source commit SHA.
@@ -26,7 +27,7 @@ spec:
       description: >-
         Complete CLI image with both scanners, unchanged AEH runtime, model clients,
         and storage clients.
-      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0-runner@sha256:c4b1f29e5eef8adab45e7d2c9d640af31f82d2b962179f3438a17d0d7065c781
+      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.1-runner@sha256:5ef9d0b539ba19de003362fef8b4dda33c1b077905e700b46442963830a1544e
     - name: tiers
       type: string
       default: '1'
@@ -134,6 +135,18 @@ spec:
       type: string
       description: Optional OTLP/gRPC collector endpoint.
       default: ''
+    - name: command-timeout
+      type: string
+      default: '7200'
+      description: Timeout in seconds for each external AEH command.
+    - name: timeout-retries
+      type: string
+      default: '1'
+      description: Additional attempts for a timed-out AEH arm; 0-5, never retry verdict failures.
+    - name: fail-on-non-success
+      type: string
+      default: 'true'
+      description: Fail after emission when static or required-publication gates fail.
   workspaces:
     - name: source
       description: Scratch storage for isolated CLI runs; keyed by TaskRun name.
@@ -144,15 +157,24 @@ spec:
       description: Konflux Tier 2 result, or SKIPPED when Tier 2 was not requested.
     - name: TEST_OUTPUT_PUBLICATION
       description: Konflux result for all explicitly selected publication destinations.
+    - name: batch-manifest
+      description: Workspace-relative validated summary path for registration.
     - name: skill-reports-ARTIFACT_OUTPUTS
       type: object
-      description: OCI report referrer, or empty uri/digest when none was attached.
+      description: Batch OCI report referrer, or empty uri/digest when none was attached.
       properties:
         uri: {}
         digest: {}
-        skill: {}
   stepTemplate:
     env:
+      - name: IMAGE_URL
+        value: $(params.image-url)
+      - name: IMAGE_DIGEST
+        value: $(params.image-digest)
+      - name: EVALUATION_TIERS
+        value: $(params.tiers)
+      - name: ABEVAL_PERSIST
+        value: $(params.persist)
       - name: ABEVAL_SOURCE
         value: /var/workdir/source
       - name: ABEVAL_OUTPUT
@@ -193,8 +215,6 @@ spec:
       env:
         - name: ABEVAL_SCANNER_RUNTIME
           value: local
-        - name: ABEVAL_PERSIST
-          value: $(params.persist)
         - name: ABEVAL_LLM_BASE_URL
           value: $(params.llm-api-base)
         - name: ABEVAL_JUDGE_BASE_URL
@@ -287,187 +307,75 @@ spec:
               name: $(params.compass-secret)
               key: token
               optional: true
-        - name: SKILL_ID
-          value: $(params.submission-dir)
-        - name: EVALUATION_TIERS
-          value: $(params.tiers)
+        - name: ABEVAL_COMMAND_TIMEOUT
+          value: $(params.command-timeout)
+        - name: ABEVAL_TIMEOUT_RETRIES
+          value: $(params.timeout-retries)
       volumeMounts:
         - name: aeh-kubeconfig
           mountPath: /var/workload
           readOnly: true
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        if [ -s /var/trusted-ca/ca-bundle.crt ]; then
-          export SSL_CERT_FILE=/var/trusted-ca/ca-bundle.crt
-        fi
-        if [ "$(cat "$(steps.step-use-trusted-artifact.exitCode.path)")" != 0 ]; then
-          echo "Trusted source retrieval failed" >&2
-          exit 3
-        fi
-        abeval run --skill-id "$SKILL_ID" --source "$ABEVAL_SOURCE" \
-          --tiers "$EVALUATION_TIERS" --persist "$ABEVAL_PERSIST" \
-          --output "$ABEVAL_OUTPUT"
+      command: [bash, -c]
+      args:
+        - |
+          set -euo pipefail
+          if [ -s /var/trusted-ca/ca-bundle.crt ]; then
+            export SSL_CERT_FILE=/var/trusted-ca/ca-bundle.crt
+          fi
+          if [ "$#" -gt 0 ] && [ "$(cat "$(steps.step-use-trusted-artifact.exitCode.path)")" != 0 ]; then
+            echo "Trusted source retrieval failed" >&2
+            exit 3
+          fi
+          exec abeval batch --source "$ABEVAL_SOURCE" --tiers "$EVALUATION_TIERS" \
+            --persist "$ABEVAL_PERSIST" --output "$ABEVAL_OUTPUT" --skill-ids "$@"
+        - bash
+        - $(params.changed-skills[*])
     - name: package-oci-reports
-      image: registry.access.redhat.com/ubi9/python-311:latest
+      image: $(params.evaluation-image)
       onError: continue
-      env: &id001
-        - &id002
-          name: IMAGE_URL
-          value: $(params.image-url)
-        - &id003
-          name: IMAGE_DIGEST
-          value: $(params.image-digest)
-        - &id004
-          name: SUBMISSION_DIR
-          value: $(params.submission-dir)
-      script: |
-        #!/usr/bin/env python3
-        import os
-        import tarfile
-        from pathlib import Path
-
-        if os.environ["IMAGE_URL"] and os.environ["IMAGE_DIGEST"]:
-            run = Path(os.environ["ABEVAL_OUTPUT"])
-            if not (run / "run.json").is_file() or not (run / "reports").is_dir():
-                raise SystemExit("No evaluation evidence available for attachment")
-            with tarfile.open(run / "reports.tar.gz", "w:gz") as archive:
-                archive.add(run / "reports", arcname="reports")
-                archive.add(run / "run.json", arcname="run.json")
+      command: [abeval, batch-package]
+      args: [--batch-dir, $(workspaces.source.path)/runs/$(context.taskRun.name)]
     - name: attach-oci-reports
       image: quay.io/konflux-ci/task-runner:3.3.0@sha256:0428af436f6942544009e38ef452a6b747e9ec79ab22fd402a3d59585984cf81
       onError: continue
-      env: *id001
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
-        if [ -z "$IMAGE_URL" ] || [ -z "$IMAGE_DIGEST" ]; then
+        if [ -z "$IMAGE_URL" ] && [ -z "$IMAGE_DIGEST" ]; then
           exit 0
         fi
-        ARCHIVE="${ABEVAL_OUTPUT}/reports.tar.gz"
-        if [ ! -s "$ARCHIVE" ]; then
-          echo "No report archive available for attachment" >&2
-          exit 1
-        fi
+        test -n "$IMAGE_URL" && test -n "$IMAGE_DIGEST"
+        rm -f "${ABEVAL_OUTPUT}/oci-attachment.json"
+        test -s "${ABEVAL_OUTPUT}/reports.tar.gz"
         select-oci-auth "$IMAGE_URL" > "$HOME/auth.json"
         cd "$ABEVAL_OUTPUT"
         ATTACH_OUTPUT=$(retry oras attach --no-tty --registry-config "$HOME/auth.json" \
-          --artifact-type application/vnd.agentic-eval.reports.v1 \
+          --artifact-type application/vnd.agentic-eval.batch-reports.v1 \
           "${IMAGE_URL}@${IMAGE_DIGEST}" \
           "reports.tar.gz:application/gzip" 2>&1) || { echo "$ATTACH_OUTPUT"; exit 1; }
         echo "$ATTACH_OUTPUT"
         ATTACH_DIGEST=$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's/^Digest: //p' | tail -n 1)
-        if [[ ! "$ATTACH_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-          echo "ORAS did not report a valid artifact digest" >&2
-          exit 1
-        fi
-        printf '{"uri":"%s","digest":"%s","skill":"%s"}' \
-          "$IMAGE_URL" "$ATTACH_DIGEST" "$SUBMISSION_DIR" \
-          > "$(results.skill-reports-ARTIFACT_OUTPUTS.path)"
+        [[ "$ATTACH_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+        printf '{"uri":"%s","digest":"%s"}' "$IMAGE_URL" "$ATTACH_DIGEST" > oci-attachment.json
     - name: emit-results
-      image: registry.access.redhat.com/ubi9/python-311:latest
+      image: $(params.evaluation-image)
       env:
-        - *id002
-        - *id003
-        - *id004
-        - name: EVALUATION_TIERS
-          value: $(params.tiers)
-        - name: EVALUATION_PERSIST
-          value: $(params.persist)
-        - name: ATTACH_EXIT_PATH
-          value: $(steps.step-attach-oci-reports.exitCode.path)
-        - name: TIER1_PATH
-          value: $(results.TEST_OUTPUT_TIER_A.path)
-        - name: TIER2_PATH
-          value: $(results.TEST_OUTPUT_TIER_B.path)
-        - name: PUBLICATION_PATH
-          value: $(results.TEST_OUTPUT_PUBLICATION.path)
-        - name: ARTIFACT_PATH
-          value: $(results.skill-reports-ARTIFACT_OUTPUTS.path)
-      script: |
-        #!/usr/bin/env python3
-        import json
-        import os
-        import re
-        from datetime import datetime, timezone
-        from pathlib import Path
-
-        stamp = datetime.now(timezone.utc).isoformat()
-        skill = os.environ["SUBMISSION_DIR"]
-
-        def output(state, note, successes=0, failures=0, warnings=0):
-            return dict(result=state, timestamp=stamp, note=note,
-                        successes=successes, failures=failures, warnings=warnings)
-
-        def project(steps, required, label):
-            by_name = {step["name"]: step for step in steps}
-            missing = required - by_name.keys()
-            selected = [by_name[name] for name in required if name in by_name]
-            invalid = [s["name"] for s in selected if s.get("status") not in {"completed", "error", "skipped"}
-                       or s.get("verdict") not in {"pass", "warn", "fail", "unavailable"}]
-            errors = [s["name"] for s in selected if s.get("blocking", True)
-                      and (s.get("status") in {"error", "skipped"} or s.get("verdict") == "unavailable")]
-            failed = [s["name"] for s in selected if s.get("blocking", True) and s.get("verdict") == "fail"]
-            problems = sorted(set(missing) | set(invalid + errors + failed))
-            state = "ERROR" if missing or invalid or errors else "FAILURE" if failed else "SUCCESS"
-            warnings = sum(s.get("verdict") == "warn" or
-                           (not s.get("blocking", True) and
-                       (s.get("status") != "completed" or s.get("verdict") == "fail")) for s in selected)
-            return output(state, label + (": " + ", ".join(problems) if problems else ": completed"),
-                          sum(s.get("status") == "completed" and s.get("verdict") in {"pass", "warn"} for s in selected),
-                          len(problems), warnings)
-
-        try:
-            tiers = {int(value) for value in os.environ["EVALUATION_TIERS"].split(",")}
-            if not tiers or tiers - {1, 2}:
-                raise ValueError("Invalid tiers")
-        except ValueError:
-            tiers = {1, 2}
-
-        tier1 = output("SKIPPED", skill + ": Tier 1 not requested")
-        tier2 = output("SKIPPED", skill + ": Tier 2 not requested")
-        try:
-            run = json.loads((Path(os.environ["ABEVAL_OUTPUT"]) / "run.json").read_text())
-            if run["schema_version"] != "1.0":
-                raise ValueError("Unsupported evidence schema")
-            steps = run["steps"]
-            if 1 in tiers:
-                required = {"prepare", "structure", "security", "quality", "report"}
-                if "skill-review" in run["requested_steps"]:
-                    required.add("skill-review")
-                tier1 = project(steps, required, skill + " Tier 1")
-            if 2 in tiers:
-                required = {"prepare", "submission", "evaluate", "report"}
-                if "submission-review" in run["requested_steps"]:
-                    required.add("submission-review")
-                tier2 = project(steps, required, skill + " Tier 2")
-            destinations = {v.strip() for v in os.environ["EVALUATION_PERSIST"].split(",") if v.strip()}
-            publication = project(run["publication"], destinations, skill + " publication")
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            error = output("ERROR", skill + ": missing or invalid evaluation evidence", failures=1)
-            if 1 in tiers:
-                tier1 = error
-            if 2 in tiers:
-                tier2 = error
-            publication = error.copy()
-
-        artifact_path = Path(os.environ["ARTIFACT_PATH"])
-        artifact = dict(uri="", digest="", skill=skill)
-        attachment_requested = bool(os.environ["IMAGE_URL"] or os.environ["IMAGE_DIGEST"])
-        if attachment_requested:
-            try:
-                artifact = json.loads(artifact_path.read_text())
-                if (artifact["uri"] != os.environ["IMAGE_URL"] or artifact["skill"] != skill
-                        or not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["digest"])
-                        or Path(os.environ["ATTACH_EXIT_PATH"]).read_text().strip() != "0"):
-                    raise ValueError("Invalid OCI attachment result")
-                publication["successes"] += 1
-            except (OSError, ValueError, KeyError, TypeError):
-                artifact = dict(uri="", digest="", skill=skill)
-                publication["result"] = "ERROR"
-                publication["failures"] += 1
-                publication["note"] += "; OCI evidence attachment failed"
-
-        for name, payload in [("TIER1_PATH", tier1), ("TIER2_PATH", tier2),
-                              ("PUBLICATION_PATH", publication), ("ARTIFACT_PATH", artifact)]:
-            Path(os.environ[name]).write_text(json.dumps(payload))
+        - name: FAIL_ON_NON_SUCCESS
+          value: $(params.fail-on-non-success)
+        - name: BATCH_MANIFEST_PATH
+          value: $(results.batch-manifest.path)
+        - name: BATCH_MANIFEST
+          value: runs/$(context.taskRun.name)/summary.json
+      command: [bash, -c]
+      args:
+        - |
+          set -euo pipefail
+          printf '%s' "$BATCH_MANIFEST" > "$BATCH_MANIFEST_PATH"
+          exec abeval batch-results --batch-dir "$ABEVAL_OUTPUT" \
+            --revision "$ABEVAL_REVISION" --tiers "$EVALUATION_TIERS" \
+            --persist "$ABEVAL_PERSIST" --results-dir /tekton/results \
+            --fail-on-non-success "$FAIL_ON_NON_SUCCESS" \
+            --image-url "$IMAGE_URL" --image-digest "$IMAGE_DIGEST" \
+            --artifact-file "${ABEVAL_OUTPUT}/oci-attachment.json" --skill-ids "$@"
+        - bash
+        - $(params.changed-skills[*])

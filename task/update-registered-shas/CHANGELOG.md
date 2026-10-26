@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0
+
+### Changed
+
+- Consume a revision-bound batch manifest from the shared source workspace instead of positional outcome arrays. Register only explicit eligible skills and use [skip-evaluation] on the bookkeeping commit.
+
+
 ## Unreleased
 
 *Nothing yet.*

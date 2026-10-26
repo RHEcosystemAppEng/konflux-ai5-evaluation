@@ -15,16 +15,16 @@ to.
 
 | Task | Purpose | Version |
 |---|---|---|
-| [aeh-skill-eval](task/aeh-skill-eval/README.md) | One CLI evaluation with explicit tiers and persistence, designed to be `Matrix`-fanned-out over a catalog. | 1.0.0 |
-| [aggregate-fanout-result](task/aggregate-fanout-result/README.md) | Aggregates a `Matrix`'s per-item `TEST_OUTPUT`s into one standardized, optionally hard-gating result. | 1.0.0 |
+| [aeh-skill-eval](task/aeh-skill-eval/README.md) | One sequential CLI batch with per-skill evidence, timeout retries, and aggregate gates. | 2.0.0 |
+| [aggregate-fanout-result](task/aggregate-fanout-result/README.md) | Legacy Matrix result aggregation; unused by sequential batch pipelines. | 1.0.0 |
 | [check-pr-label](task/check-pr-label/README.md) | Fail-closed check of whether the merged MR for a commit carries an opt-in label (GitLab). | 0.1.0 |
 | [discover-changed-skills](task/discover-changed-skills/README.md) | Diffs a catalog's registered SHAs against the current SHA to find what changed (GitLab). | 0.1.0 |
-| [update-registered-shas](task/update-registered-shas/README.md) | Bumps a catalog's registered SHAs and pushes the bookkeeping commit (GitLab). | 0.1.0 |
+| [update-registered-shas](task/update-registered-shas/README.md) | Registers eligible skills from a revision-bound batch summary (GitLab). | 1.0.0 |
 
 Every task's own `README.md` documents its full Parameters/Results/
 Workspaces/**Secrets** tables and a copy-pasteable usage snippet. See
 [docs/examples/skills-evaluation-usage.md](docs/examples/skills-evaluation-usage.md)
-for pipeline wiring and the CLI migration.
+for pipeline wiring and the CLI migration. Sequential pipelines no longer use the legacy aggregator.
 
 ## Reusability scope
 
@@ -56,8 +56,9 @@ target), to:
 quay.io/ecosystem-appeng/konflux-skill-evaluation/<task-name>:<version>
 ```
 
-The CLI-based `aeh-skill-eval` and `aggregate-fanout-result` definitions use
-version `1.0.0`; catalog/label bookkeeping tasks remain at `0.1.0`. Evaluation/trial runtime images are explicit task parameters. Result adaptation
+The batch evaluation task is `2.0.0`, and batch registration is `1.0.0`.
+Discovery and label tasks remain `0.1.0`; the legacy aggregator remains available
+for older consumers. Runtime images use `v1.0.1-runner` and the unchanged `v1.0-trial`, both pinned by digest. Evaluation/trial runtime images are explicit task parameters. Result adaptation
 uses standard Python images; OCI attachment reuses the existing Konflux task-runner. Build and publish them before updating
 pipeline bundle references. See [migration](docs/migration-cli.md).
 

@@ -1,94 +1,76 @@
-# Pipeline and task parameters
+# Sequential skill evaluation pipeline
 
-Expose `tiers` and `persist` as Pipeline parameters and forward them to the
-shared task. Defaults below run static checks with no persistence. Set
-`tiers=1,2` to add trials, `tiers=2` for trials alone, and `persist=postgres,s3`
-to enable those destinations. `image-url` and `image-digest` independently enable OCI evidence.
+Discover changed IDs once, then pass the array to one batch task. There is no
+Matrix. The evaluation task emits results before enforcing static and required
+publication gates. Trial results remain informational; registration excludes
+runtime failures. Separate pipeline runs may execute concurrently.
 
 ```yaml
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
-  name: evaluate-skills
+  name: skills-evaluation
 spec:
   params:
-    - name: tiers
-      type: string
-      default: "1"
-    - name: persist
-      type: string
-      default: ""
-    - name: skills
-      type: array
     - name: revision
       type: string
     - name: source-artifact
       type: string
-    - name: evaluation-image
-      type: string
-      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0-runner@sha256:c4b1f29e5eef8adab45e7d2c9d640af31f82d2b962179f3438a17d0d7065c781
-    - name: trial-image
-      type: string
-      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0-trial@sha256:c497b4f57d17aa7cfba98a97a1b2d4eca330268a38270a99e39cb77ce71cb226
-    - name: image-url
-      type: string
-      default: ""
-    - name: image-digest
-      type: string
-      default: ""
   workspaces:
     - name: evaluation
   tasks:
-    - name: evaluate
+    - name: discover
       taskRef:
-        name: aeh-skill-eval
-      matrix:
-        params:
-          - name: submission-dir
-            value: $(params.skills[*])
+        name: discover-changed-skills
       params:
-        - name: tiers
-          value: $(params.tiers)
-        - name: persist
-          value: $(params.persist)
-        - name: submission-revision
+        - name: current-sha
           value: $(params.revision)
-        - name: source-artifact
-          value: $(params.source-artifact)
-        - name: evaluation-image
-          value: $(params.evaluation-image)
-        - name: aeh-image
-          value: $(params.trial-image)
-        - name: image-url
-          value: $(params.image-url)
-        - name: image-digest
-          value: $(params.image-digest)
       workspaces:
         - name: source
           workspace: evaluation
-    - name: gate-static
+    - name: evaluate
+      timeout: 22h
       taskRef:
-        name: aggregate-fanout-result
+        name: aeh-skill-eval
       params:
         - name: changed-skills
-          value: $(params.skills[*])
-        - name: eval-outcomes
-          value: $(tasks.evaluate.results.TEST_OUTPUT_TIER_A[*])
-        - name: fail-on-non-success
-          value: "true"
+          value: $(tasks.discover.results.changed-skills[*])
+        - name: source-artifact
+          value: $(params.source-artifact)
+        - name: submission-revision
+          value: $(params.revision)
+        - name: tiers
+          value: '1,2'
+        - name: persist
+          value: postgres,s3
+        - name: timeout-retries
+          value: '1'
+      workspaces:
+        - name: source
+          workspace: evaluation
+    - name: register
+      runAfter: [evaluate]
+      taskRef:
+        name: update-registered-shas
+      params:
+        - name: current-sha
+          value: $(params.revision)
+        - name: should-evaluate
+          value: 'true'
+        - name: changed-skills
+          value: $(tasks.discover.results.changed-skills[*])
+        - name: batch-manifest
+          value: $(tasks.evaluate.results.batch-manifest)
+      workspaces:
+        - name: source
+          workspace: evaluation
 ```
 
-Use immutable bundle/image references in deployed pipelines; local task names
-are shown for readability. Pass an upstream clone task's trusted artifact result
-when composing this with the build pipeline. Model endpoints, workload access,
-and persistence Secrets are configured through the shared task's parameters.
-
-Repeat aggregation for `TEST_OUTPUT_TIER_B` and `TEST_OUTPUT_PUBLICATION` when
-those results should gate the pipeline. Unrequested tiers report SKIPPED and
-are excluded by aggregation. Arrays must contain matching identifiers/outcomes.
-
-GitLab label checks, catalog discovery, and registered-SHA updates remain
-separate tasks. The calling pipeline uses their results to choose skills and
-parameters. If different skill groups need different tiers, use separate Matrix
-invocations with explicit `tiers` values. The evaluation task does not silently
-add, remove, or downgrade requested tiers.
+In production, resolve published bundles by digest: evaluation `2.0.0`,
+registration `1.0.0`, and discovery `0.1.0`. The default images use
+`v1.0.1-runner` and the unchanged `v1.0-trial`, pinned by digest. Supply existing Secrets and a trusted source artifact as documented by
+the task. Add component `image-url`/`image-digest` to require OCI attachment.
+PipelineRun timeouts must exceed the evaluation task's batch duration; the
+agentic-plugins pipelines use a 24-hour overall budget, 23-hour tasks budget,
+and a 22-hour evaluation task cap. Adjust these budgets for workload size.
+Do not configure whole-batch automatic retries.

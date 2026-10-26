@@ -33,6 +33,8 @@ spec:
       taskRef:
         name: update-registered-shas
       params:
+        - name: batch-manifest
+          value: summary.json
         - name: current-sha
           value: "deadbeef"
         - name: should-evaluate

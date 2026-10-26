@@ -1,18 +1,3 @@
-# Bumps every evaluated catalog item's registered SHA to current-sha, except
-# ones that hit a runtime error this run, via a caller-supplied registration
-# script (default scripts/register_evaluation_results.py, see that script's
-# own docstring), in a single batched commit + push. Skipped entirely when
-# should-evaluate is "false". The commit message carries a `[skip-fanout]`
-# marker so the caller pipeline can avoid re-triggering itself on this
-# task's own bookkeeping push.
-#
-# Reusable across any GitLab-hosted repository that follows the same
-# "registered SHA" bookkeeping convention as agentic-plugins (a registration
-# script importable via `python3 <register-script-path> --current-sha ... \
-# --changed-skills ... --eval-outcomes ...`, which rewrites tracked files
-# in-place) -- git-remote-url/git-push-branch/register-script-path/
-# git-token-secret-*/git-bot-name/git-bot-email are all parameterized below,
-# defaulted to the values agentic-plugins itself uses.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -20,14 +5,12 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/version: "1.0.0"
 spec:
   description: >-
-    Runs a caller-supplied registration script against the already-cloned
-    `source` workspace, then -- if that script changed any tracked files and
-    should-evaluate is "true" -- commits and pushes those changes back to
-    git-remote-url/git-push-branch in a single batch, with a `[skip-fanout]`
-    marker in the commit message.
+    Register only evaluated skill IDs from a revision-bound batch manifest after
+    static/publication gates pass. Runtime errors remain at their previous SHA.
+    Commit once with [skip-evaluation] to prevent recursive evaluation.
   params:
     - name: current-sha
       type: string
@@ -38,17 +21,16 @@ spec:
     - name: changed-skills
       type: array
       default: []
-      description: Identifiers, same order as eval-outcomes. Forwarded verbatim to register-script-path.
-    - name: eval-outcomes
-      type: array
-      default: []
-      description: Per-item TEST_OUTPUT JSON strings, same order/length as changed-skills. Forwarded verbatim to register-script-path.
+      description: Expected unique skill identifiers; validated against the batch summary.
+    - name: batch-manifest
+      type: string
+      description: Path relative to the source workspace containing the validated batch summary.
     - name: register-script-path
       type: string
       default: "scripts/register_evaluation_results.py"
       description: >-
         Path, relative to the repository root, of the registration script to
-        run. Must accept --current-sha/--changed-skills/--eval-outcomes and
+        run. Must accept --current-sha/--changed-skills/--batch-manifest and
         rewrite its tracked bookkeeping files in place.
     - name: git-remote-url
       type: string
@@ -142,12 +124,12 @@ spec:
           echo "https://oauth2:${GIT_TOKEN}@${GIT_HOST}" > ~/.git-credentials
 
           git add -A
-          git commit --quiet -m "chore(fanout): register skill SHAs at ${CURRENT_SHA} [skip-fanout]"
+          git commit --quiet -m "chore(evaluation): register skill SHAs at ${CURRENT_SHA} [skip-evaluation]"
           git push --quiet "$GIT_REMOTE_URL" "HEAD:${GIT_PUSH_BRANCH}"
         - "bash"
         - "--current-sha"
         - "$(params.current-sha)"
         - "--changed-skills"
         - "$(params.changed-skills[*])"
-        - "--eval-outcomes"
-        - "$(params.eval-outcomes[*])"
+        - "--batch-manifest"
+        - "$(workspaces.source.path)/$(params.batch-manifest)"

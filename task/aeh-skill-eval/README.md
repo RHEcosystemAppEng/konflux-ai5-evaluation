@@ -1,118 +1,108 @@
 # aeh-skill-eval
 
-Run a skill evaluation with explicit `tiers` and optional `persist` task
-parameters. A calling pipeline can expose the same parameters and forward them.
-The task passes them directly to one `abeval run` invocation.
+Version 2.0.0 evaluates an explicit array of changed skills through one installed
+`abeval batch` invocation. The CLI runs the existing single-skill workflow in
+sequence; configured plugin trees, MCP fixtures, tiers, policy, reporting, and
+PostgreSQL/S3/Compass persistence are unchanged. Separate pipeline runs may run
+concurrently. An empty list is a successful no-op.
 
-## Steps and ownership
+## Steps
 
-| Step | Responsibility |
-|---|---|
-| `use-trusted-artifact` | Retrieve the pipeline's trusted source snapshot. |
-| `evaluate` | Run `abeval run --tiers ... --persist ...`. The CLI stages source, validates, scans, reviews, runs AEH, reports, and persists. |
-| `package-oci-reports` | Archive reports and the run manifest using a standard Python image. |
-| `attach-oci-reports` | Reuse the existing Konflux task-runner with registry auth, retry, and ORAS. |
-| `emit-results` | Convert saved evidence inline using a standard Python image. |
+1. Retrieve the trusted source artifact once.
+2. Run `abeval batch`, retaining its manifest and every skill's evidence even
+   when one skill fails. Only timed-out AEH arms are retried (default one retry).
+3. Package the batch manifest and per-skill reports through `batch-package`.
+4. Attach one OCI archive to the component digest using Konflux registry auth
+   and the existing task-runner/ORAS image.
+5. Validate evidence and emit bounded aggregate results with `batch-results`,
+   then fail when static or required-publication gates fail. Tier 2 is informational.
 
-There are no per-phase evaluation steps. The CLI owns operation ordering,
-dependencies, failure handling, reporting, and database/S3/Compass publication.
-Konflux owns source retrieval, workload credentials, image references, fanout,
-and the OCI subject and registry credentials used for evidence attachment.
-
-## Tier and persistence parameters
-
-- `tiers=1` runs static structure, security, and quality checks.
-- `tiers=2` runs AEH submission validation/review and trials.
-- `tiers=1,2` runs both tiers sequentially.
-- `persist=postgres,s3,compass` enables the selected application destinations;
-  empty disables them. Credentials alone do not enable publication.
-- `image-url` plus `image-digest` independently enable Konflux OCI evidence
-  attachment. Leave both empty to skip it.
-
-No label or changed-skill selection is hidden in the task or CLI. The pipeline
-selects which skills run and passes their requested tiers. A requested Tier 2
-without a submission is an error. Submission metadata owns single/pairwise mode,
-review policy, config filenames, models, thresholds, fixtures, and Compass facts.
-
-## Runtime images
-
-`evaluation-image` contains the CLI with both scanners installed as dependencies,
-unchanged upstream AEH, Harbor/Kubernetes, and model/storage clients. `aeh-image`
-is used only for Tier 2 trial pods. These are the two project-owned images;
-both default to verified `v1.0` registry digests and can be overridden by the calling pipeline.
-
-Evidence packaging, result conversion, and aggregation use the standard Red Hat
-Python image. OCI attachment reuses the existing digest-pinned Konflux task-runner
-and its `select-oci-auth`, `retry`, and `oras` tools. There is no utility image or
-OCI client in the CLI. No packages are installed at TaskRun startup.
+Timeout retries stop the local process group and await cleanup of that
+invocation's recorded trial pods before starting another attempt. Other pipeline
+runs' pods are never swept. Unconfirmed cleanup prevents further batch trials.
+No shell skill loop, new controller, queue, or whole-batch automatic retry is used.
 
 ## Parameters
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `submission-dir` | Required | Catalog skill identifier: <pack>/<skill>. |
-| `submission-revision` | Required | Evaluated source commit SHA. |
-| `source-artifact` | Required | Trusted source artifact for the evaluated revision. |
-| `evaluation-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0-runner@sha256:c4b1f29e5eef8adab45e7d2c9d640af31f82d2b962179f3438a17d0d7065c781` | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
-| `tiers` | 1 | Evaluation tiers passed directly to the CLI: 1, 2, or 1,2. |
+| `changed-skills` | `[]` | Ordered catalog skill identifiers; an empty list is a successful no-op. |
+| `submission-revision` | `Required` | Evaluated source commit SHA. |
+| `source-artifact` | `Required` | Trusted source artifact for the evaluated revision. |
+| `evaluation-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.1-runner@sha256:5ef9d0b539ba19de003362fef8b4dda33c1b077905e700b46442963830a1544e` | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
+| `tiers` | `1` | Evaluation tiers passed directly to the CLI: 1, 2, or 1,2. |
 | `aeh-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0-trial@sha256:c497b4f57d17aa7cfba98a97a1b2d4eca330268a38270a99e39cb77ce71cb226` | Trial image pullable by the workload cluster; used for Tier 2. |
-| `persist` | Unset / disabled | Optional evaluation persistence: postgres,s3,compass. OCI evidence attachment is controlled by image-url and image-digest. |
-| `persistence-required` | true | Treat selected publication failures as errors. |
-| `image-url` | Unset / disabled | Built component image repository for OCI report attachment. |
-| `image-digest` | Unset / disabled | Built component image digest for OCI report attachment. |
-| `llm-secret` | llm-credentials | Konflux Secret containing api-key for local review and suite-level judging. |
-| `llm-api-base` | Unset / disabled | OpenAI-compatible review and judge endpoint, normally ending in /v1. |
-| `llm-model` | gemini-2.5-flash | Submission and optional skill review model. |
-| `agent-api-base` | Unset / disabled | Agent provider endpoint; for Claude through LiteLLM use the gateway root. |
-| `skill-review` | false | Enable advisory LLM skill review for every leg. |
-| `submission-review` | auto | auto honors submission metadata; also accepts on or off. |
-| `continue-on-tier1-failure` | false | Run selected trials despite blocking static findings. |
-| `aeh-model-override` | Unset / disabled | Override submission agent model. |
-| `aeh-judge-model-override` | Unset / disabled | Override submission judge model. |
-| `aeh-kubeconfig-secret` | agentic-plugins-konflux-sa-kubeconfig | Konflux Secret containing workload kubeconfig under key kubeconfig. |
-| `workload-namespace` | agentic-plugins-evaluation | Namespace on the workload cluster. |
-| `workload-credentials-secret` | llm-credentials | Existing workload Secret with native provider SDK environment keys. |
-| `workload-service-account` | Unset / disabled | Trial service account; empty uses native AEH defaults. |
-| `database-secret` | ab-eval-db-credentials | Konflux Secret with database-url and optional database-tls-route-host. |
-| `s3-secret` | minio-credentials | Konflux Secret with endpoint-url, root-user, root-password, optional insecure-skip-tls-verify. |
-| `s3-bucket` | ab-eval-reports | S3 publication bucket. |
-| `compass-secret` | compass-facts-api | Konflux Secret containing token. |
-| `ca-bundle-configmap` | trusted-ca-bundle | Optional Konflux ConfigMap with trusted CA bundle at ca-bundle.crt. |
-| `otel-exporter-endpoint` | Unset / disabled | Optional OTLP/gRPC collector endpoint. |
+| `persist` | `Disabled` | Optional evaluation persistence: postgres,s3,compass. OCI evidence attachment is controlled by image-url and image-digest. |
+| `persistence-required` | `true` | Treat selected publication failures as errors. |
+| `image-url` | `Disabled` | Built component image repository for OCI report attachment. |
+| `image-digest` | `Disabled` | Built component image digest for OCI report attachment. |
+| `llm-secret` | `llm-credentials` | Konflux Secret containing api-key for local review and suite-level judging. |
+| `llm-api-base` | `Disabled` | OpenAI-compatible review and judge endpoint, normally ending in /v1. |
+| `llm-model` | `gemini-2.5-flash` | Submission and optional skill review model. |
+| `agent-api-base` | `Disabled` | Agent provider endpoint; for Claude through LiteLLM use the gateway root. |
+| `skill-review` | `false` | Enable advisory LLM skill review for every leg. |
+| `submission-review` | `auto` | auto honors submission metadata; also accepts on or off. |
+| `continue-on-tier1-failure` | `false` | Run selected trials despite blocking static findings. |
+| `aeh-model-override` | `Disabled` | Override submission agent model. |
+| `aeh-judge-model-override` | `Disabled` | Override submission judge model. |
+| `aeh-kubeconfig-secret` | `agentic-plugins-konflux-sa-kubeconfig` | Konflux Secret containing workload kubeconfig under key kubeconfig. |
+| `workload-namespace` | `agentic-plugins-evaluation` | Namespace on the workload cluster. |
+| `workload-credentials-secret` | `llm-credentials` | Existing workload Secret with native provider SDK environment keys. |
+| `workload-service-account` | `Disabled` | Trial service account; empty uses native AEH defaults. |
+| `database-secret` | `ab-eval-db-credentials` | Konflux Secret with database-url and optional database-tls-route-host. |
+| `s3-secret` | `minio-credentials` | Konflux Secret with endpoint-url, root-user, root-password, optional insecure-skip-tls-verify. |
+| `s3-bucket` | `ab-eval-reports` | S3 publication bucket. |
+| `compass-secret` | `compass-facts-api` | Konflux Secret containing token. |
+| `ca-bundle-configmap` | `trusted-ca-bundle` | Optional Konflux ConfigMap with trusted CA bundle at ca-bundle.crt. |
+| `otel-exporter-endpoint` | `Disabled` | Optional OTLP/gRPC collector endpoint. |
+| `command-timeout` | `7200` | Timeout in seconds for each external AEH command. |
+| `timeout-retries` | `1` | Additional attempts for a timed-out AEH arm; 0-5, never retry verdict failures. |
+| `fail-on-non-success` | `true` | Fail after emission when static or required-publication gates fail. |
 
-## Results and workspace
+## Results and workspaces
 
 | Result | Meaning |
 |---|---|
-| `TEST_OUTPUT_TIER_A` | Tier 1 SUCCESS, FAILURE, or ERROR; SKIPPED when not requested. |
-| `TEST_OUTPUT_TIER_B` | Tier 2 SUCCESS, FAILURE, or ERROR; SKIPPED when not requested. |
-| `TEST_OUTPUT_PUBLICATION` | Independent status of selected persistence and OCI attachment. |
-| `skill-reports-ARTIFACT_OUTPUTS` | `{uri,digest,skill}` for the OCI referrer; empty uri/digest when absent. |
+| `TEST_OUTPUT_TIER_A` | Aggregate static result; unrequested tiers are excluded. |
+| `TEST_OUTPUT_TIER_B` | Aggregate informational trial result. |
+| `TEST_OUTPUT_PUBLICATION` | Aggregate application publication plus required OCI attachment. |
+| `batch-manifest` | Workspace-relative path to validated `summary.json`. |
+| `skill-reports-ARTIFACT_OUTPUTS` | Batch OCI referrer `{uri,digest}`; empty when not requested. |
 
-Task steps allow result emission after a failure; gate result content rather
-than TaskRun success. Missing selected evidence produces ERROR. Aggregate the
-publication result when those destinations are required.
-The `source` workspace stores isolated runs at `runs/<taskrun-name>`. Matrix legs
-can share it. Source copies and kubeconfigs are excluded from report uploads.
+The `source` workspace holds `runs/<taskrun-name>/batch.json`, `summary.json`,
+and isolated per-skill run directories. Detailed outcomes remain in files to
+avoid Tekton result limits. Share this workspace with discovery and registration as their
+`source` workspace; keep the clone under `repo/` and batch evidence under `runs/`. The source input still comes from the trusted artifact,
+not the discovery clone. Allocate batch storage and task/pipeline timeouts for
+all selected skills and their bounded timeout retries.
 
-## Credentials
+Secrets and ConfigMap names are parameters. The workload kubeconfig is mounted
+read-only; workload credentials must already exist in that cluster with native
+SDK names. Konflux review, storage, and registry credentials retain their existing
+contracts. The optional CA bundle is mounted from `ca-bundle-configmap`.
 
-| Parameter | Secret keys / location |
-|---|---|
-| `llm-secret` | Konflux `api-key` for local review and suite judging. |
-| `aeh-kubeconfig-secret` | Konflux `kubeconfig` for workload access. |
-| `workload-credentials-secret` | Existing workload-namespace Secret with native SDK keys, such as `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`. |
-| `database-secret` | Konflux `database-url`; optional `database-tls-route-host`. |
-| `s3-secret` | Konflux `endpoint-url`, `root-user`, `root-password`; optional `insecure-skip-tls-verify`. |
-| `compass-secret` | Konflux `token`. |
+## Usage
 
-Registry authentication is selected by the existing Konflux `select-oci-auth`
-helper. No registry Secret or file is configured through the application.
-The optional CA ConfigMap supplies
-`ca-bundle.crt`, including public and private roots for controller clients.
-Workload CAs must separately exist in the trial image or workload configuration.
-TLS verification remains enabled. Selecting a destination without credentials
-records a publication error.
+```yaml
+- name: evaluate-skills
+  taskRef:
+    name: aeh-skill-eval
+  params:
+    - name: changed-skills
+      value: $(tasks.discover.results.changed-skills[*])
+    - name: submission-revision
+      value: $(params.revision)
+    - name: source-artifact
+      value: $(tasks.clone.results.SOURCE_ARTIFACT)
+    - name: tiers
+      value: '1,2'
+    - name: persist
+      value: postgres,s3
+  workspaces:
+    - name: source
+      workspace: evaluation-evidence
+```
 
-See [pipeline parameter forwarding](../../docs/examples/skills-evaluation-usage.md)
-and [migration](../../docs/migration-cli.md).
+Build and publish the 0.4.0 CLI runner image before publishing the 2.0.0 task
+bundle. Upgrade both pipelines and the 1.0.0 registration task together. Existing
+published 1.0.0 evaluation bundles retain their old interface.
