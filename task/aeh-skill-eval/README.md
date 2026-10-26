@@ -1,6 +1,6 @@
 # aeh-skill-eval
 
-Version 2.0.0 evaluates an explicit array of changed skills through one installed
+Version 2.0.1 evaluates an explicit array of changed skills through one installed
 `abeval batch` invocation. The CLI runs the existing single-skill workflow in
 sequence; configured plugin trees, MCP fixtures, tiers, policy, reporting, and
 PostgreSQL/S3/Compass persistence are unchanged. Separate pipeline runs may run
@@ -29,9 +29,9 @@ No shell skill loop, new controller, queue, or whole-batch automatic retry is us
 | `changed-skills` | `[]` | Ordered catalog skill identifiers; an empty list is a successful no-op. |
 | `submission-revision` | `Required` | Evaluated source commit SHA. |
 | `source-artifact` | `Required` | Trusted source artifact for the evaluated revision. |
-| `evaluation-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.1-runner@sha256:5ef9d0b539ba19de003362fef8b4dda33c1b077905e700b46442963830a1544e` | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
+| `evaluation-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-runner@sha256:cd70287e9cb68ab36b0f150635ed07c89cc2fbbdc910118d2efb27e52c95f77d` | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
 | `tiers` | `1` | Evaluation tiers passed directly to the CLI: 1, 2, or 1,2. |
-| `aeh-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0-trial@sha256:c497b4f57d17aa7cfba98a97a1b2d4eca330268a38270a99e39cb77ce71cb226` | Trial image pullable by the workload cluster; used for Tier 2. |
+| `aeh-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-trial@sha256:374b28704de8562ae2d6130d84d8d33d99db7dfe9680315034b10db5308cc983` | Trial image pullable by the workload cluster; used for Tier 2. |
 | `persist` | `Disabled` | Optional evaluation persistence: postgres,s3,compass. OCI evidence attachment is controlled by image-url and image-digest. |
 | `persistence-required` | `true` | Treat selected publication failures as errors. |
 | `image-url` | `Disabled` | Built component image repository for OCI report attachment. |
@@ -41,6 +41,7 @@ No shell skill loop, new controller, queue, or whole-batch automatic retry is us
 | `llm-model` | `gemini-2.5-flash` | Submission and optional skill review model. |
 | `agent-api-base` | `Disabled` | Agent provider endpoint; for Claude through LiteLLM use the gateway root. |
 | `skill-review` | `false` | Enable advisory LLM skill review for every leg. |
+| `insecure-ssl` | `false` | Opt in to the internal endpoint TLS bypass for evaluations and the database route. Kubernetes API verification is unchanged; S3 has its own Secret setting. |
 | `submission-review` | `auto` | auto honors submission metadata; also accepts on or off. |
 | `continue-on-tier1-failure` | `false` | Run selected trials despite blocking static findings. |
 | `aeh-model-override` | `Disabled` | Override submission agent model. |
@@ -103,6 +104,6 @@ contracts. The optional CA bundle is mounted from `ca-bundle-configmap`.
       workspace: evaluation-evidence
 ```
 
-Build and publish the 0.4.0 CLI runner image before publishing the 2.0.0 task
+Build and publish the 0.4.1 CLI runner and matching trial images before publishing the 2.0.1 task
 bundle. Upgrade both pipelines and the 1.0.0 registration task together. Existing
 published 1.0.0 evaluation bundles retain their old interface.

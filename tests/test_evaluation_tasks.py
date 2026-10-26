@@ -30,6 +30,12 @@ class TaskContracts(unittest.TestCase):
             self.assertIn(expected, script)
         self.assertEqual(STEPS["package-oci-reports"]["command"], ["abeval", "batch-package"])
 
+    def test_tls_mode_is_an_explicit_cli_setting(self):
+        params = {p["name"]: p for p in TASK["params"]}
+        self.assertEqual(params["insecure-ssl"]["default"], "false")
+        env = {e["name"]: e for e in STEPS["evaluate"]["env"]}
+        self.assertEqual(env["ABEVAL_INSECURE_SSL"]["value"], "$(params.insecure-ssl)")
+
     def test_registration_consumes_manifest_and_evidence_workspace(self):
         task = yaml.safe_load((ROOT / "task/update-registered-shas/update-registered-shas.yaml").read_text())["spec"]
         self.assertEqual([w["name"] for w in task["workspaces"]], ["source"])

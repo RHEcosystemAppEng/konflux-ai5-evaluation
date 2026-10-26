@@ -5,7 +5,7 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: 2.0.0
+    app.kubernetes.io/version: 2.0.1
 spec:
   description: >-
     Evaluate changed skills sequentially through one abeval batch invocation.
@@ -27,7 +27,7 @@ spec:
       description: >-
         Complete CLI image with both scanners, unchanged AEH runtime, model clients,
         and storage clients.
-      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.1-runner@sha256:5ef9d0b539ba19de003362fef8b4dda33c1b077905e700b46442963830a1544e
+      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-runner@sha256:cd70287e9cb68ab36b0f150635ed07c89cc2fbbdc910118d2efb27e52c95f77d
     - name: tiers
       type: string
       default: '1'
@@ -35,7 +35,7 @@ spec:
     - name: aeh-image
       type: string
       description: Trial image pullable by the workload cluster; used for Tier 2.
-      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0-trial@sha256:c497b4f57d17aa7cfba98a97a1b2d4eca330268a38270a99e39cb77ce71cb226
+      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-trial@sha256:374b28704de8562ae2d6130d84d8d33d99db7dfe9680315034b10db5308cc983
     - name: persist
       type: string
       description: >-
@@ -76,6 +76,10 @@ spec:
     - name: skill-review
       type: string
       description: Enable advisory LLM skill review for every leg.
+      default: 'false'
+    - name: insecure-ssl
+      type: string
+      description: Skip certificate verification for evaluation clients and the database TLS route; Kubernetes API verification is unchanged.
       default: 'false'
     - name: submission-review
       type: string
@@ -221,6 +225,8 @@ spec:
           value: $(params.llm-api-base)
         - name: ABEVAL_AGENT_BASE_URL
           value: $(params.agent-api-base)
+        - name: ABEVAL_INSECURE_SSL
+          value: $(params.insecure-ssl)
         - name: ABEVAL_LLM_MODEL
           value: $(params.llm-model)
         - name: ABEVAL_SKILL_REVIEW

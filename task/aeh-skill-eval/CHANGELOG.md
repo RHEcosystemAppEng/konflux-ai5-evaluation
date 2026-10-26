@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.1
+
+- Add the explicit `insecure-ssl` CLI parameter for internal model endpoints and the database TLS route.
+- Update the runner and trial images for Harbor 0.25.0, restored opt-in Python TLS handling, and native pod environment delivery.
+
 ## 2.0.0
 
 ### Changed
