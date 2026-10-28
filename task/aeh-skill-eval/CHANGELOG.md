@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased: evidence schema v2 integration
+
+- Pass the digest-pinned built component image to CLI 0.5.0 as `ABEVAL_BUILT_IMAGE_REF` for each evaluated skill.
+- Keep existing published runner defaults until a runner containing the new CLI is released.
+
 ## 2.0.1
 
 - Add the explicit `insecure-ssl` CLI parameter for internal model endpoints and the database TLS route.

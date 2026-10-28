@@ -332,6 +332,10 @@ spec:
             echo "Trusted source retrieval failed" >&2
             exit 3
           fi
+          if [ -n "$IMAGE_URL" ] || [ -n "$IMAGE_DIGEST" ]; then
+            test -n "$IMAGE_URL" && test -n "$IMAGE_DIGEST"
+            export ABEVAL_BUILT_IMAGE_REF="${IMAGE_URL}@${IMAGE_DIGEST}"
+          fi
           exec abeval batch --source "$ABEVAL_SOURCE" --tiers "$EVALUATION_TIERS" \
             --persist "$ABEVAL_PERSIST" --output "$ABEVAL_OUTPUT" --skill-ids "$@"
         - bash
@@ -339,8 +343,16 @@ spec:
     - name: package-oci-reports
       image: $(params.evaluation-image)
       onError: continue
-      command: [abeval, batch-package]
-      args: [--batch-dir, $(workspaces.source.path)/runs/$(context.taskRun.name)]
+      command: [bash, -c]
+      args:
+        - |
+          set -euo pipefail
+          abeval batch-package --batch-dir "$ABEVAL_OUTPUT"
+          # The OCI attachment step runs under a different image UID. Allow it to
+          # access known files in this directory without exposing directory listings.
+          chmod 0711 "$(dirname "$ABEVAL_OUTPUT")"
+          chmod 0733 "$ABEVAL_OUTPUT"
+          chmod 0644 "$ABEVAL_OUTPUT/reports.tar.gz"
     - name: attach-oci-reports
       image: quay.io/konflux-ci/task-runner:3.3.0@sha256:0428af436f6942544009e38ef452a6b747e9ec79ab22fd402a3d59585984cf81
       onError: continue
@@ -363,6 +375,7 @@ spec:
         ATTACH_DIGEST=$(printf '%s\n' "$ATTACH_OUTPUT" | sed -n 's/^Digest: //p' | tail -n 1)
         [[ "$ATTACH_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
         printf '{"uri":"%s","digest":"%s"}' "$IMAGE_URL" "$ATTACH_DIGEST" > oci-attachment.json
+        chmod 0644 oci-attachment.json
     - name: emit-results
       image: $(params.evaluation-image)
       env:

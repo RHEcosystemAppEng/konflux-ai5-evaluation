@@ -107,3 +107,13 @@ contracts. The optional CA bundle is mounted from `ca-bundle-configmap`.
 Build and publish the 0.4.1 CLI runner and matching trial images before publishing the 2.0.1 task
 bundle. Upgrade both pipelines and the 1.0.0 registration task together. Existing
 published 1.0.0 evaluation bundles retain their old interface.
+
+### PostgreSQL evidence schema v2
+
+With CLI 0.5.0, the batch invocation records the built component image as
+`ABEVAL_BUILT_IMAGE_REF=<image-url>@<image-digest>` for every evaluated skill when
+those inputs are supplied. This is separate from `aeh-image`, the trial runtime.
+The source revision is retained on every skill evaluation. The new PostgreSQL
+schema requires a fresh database; existing schema v1 tables are not modified or
+migrated. The runner image must be rebuilt and released with the new CLI before
+these schema changes take effect; the currently pinned runner is unchanged.
