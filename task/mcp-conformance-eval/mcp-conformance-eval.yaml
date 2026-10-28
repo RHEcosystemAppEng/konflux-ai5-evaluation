@@ -118,6 +118,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
+        # shellcheck disable=SC2016  # envsubst variable spec is intentionally single-quoted
         envsubst \
           '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${SERVER_URL} ${TIMEOUT} ${OPENAPI_URL} ${COMPASS_SECRET}' \
           < "$JOB_TEMPLATE" \
@@ -140,13 +141,15 @@ spec:
           value: $(params.job-timeout)
         - name: COMPASS_SECRET
           value: $(params.compass-secret)
+        - name: SECRETS_NAMESPACE
+          value: $(params.secrets-namespace)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
 
         # Copy Compass secret into ephemeral namespace if it exists
         if [ -n "$COMPASS_SECRET" ]; then
-          if oc get secret "$COMPASS_SECRET" -n "$(params.secrets-namespace)" -o yaml \
+          if oc get secret "$COMPASS_SECRET" -n "$SECRETS_NAMESPACE" -o yaml \
             | sed '/^\s*namespace:/d; /^\s*uid:/d; /^\s*resourceVersion:/d; /^\s*creationTimestamp:/d' \
             | oc apply -n "$NAMESPACE" -f - 2>/dev/null; then
             echo "Copied Compass secret '$COMPASS_SECRET' into $NAMESPACE"
@@ -165,7 +168,6 @@ spec:
         # Wait for the Job to finish. Logs remain available after the pod
         # completes, so no exec or file copy is needed.
         DEADLINE=$((SECONDS + JOB_TIMEOUT))
-        JOB_STATE="running"
         while true; do
           COMPLETE=$(oc get job "$JOB_NAME" -n "$NAMESPACE" \
             -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' \
@@ -175,17 +177,14 @@ spec:
             2>/dev/null || true)
 
           if [ "$COMPLETE" = "True" ]; then
-            JOB_STATE="complete"
             echo "Probe Job completed"
             break
           fi
           if [ "$FAILED" = "True" ]; then
-            JOB_STATE="failed"
             echo "WARNING: Probe Job failed; collecting available logs"
             break
           fi
           if [ "$SECONDS" -ge "$DEADLINE" ]; then
-            JOB_STATE="timed_out"
             echo "ERROR: Probe Job timed out after ${JOB_TIMEOUT}s; collecting available logs"
             break
           fi

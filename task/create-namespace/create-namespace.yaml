@@ -47,14 +47,20 @@ spec:
       env:
         - name: KUBECONFIG
           value: $(workspaces.target-kubeconfig.path)/kubeconfig
+        - name: PIPELINE_RUN_ID
+          value: $(params.pipeline-run-id)
+        - name: PIPELINE_SA_NAME
+          value: $(params.pipeline-sa-name)
+        - name: PIPELINE_SA_NAMESPACE
+          value: $(params.pipeline-sa-namespace)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
         echo "=== CREATE EPHEMERAL NAMESPACE ==="
 
-        RUN_ID=$(echo "$(params.pipeline-run-id)" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-40)
+        RUN_ID=$(printf '%s' "$PIPELINE_RUN_ID" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-40)
         NAMESPACE="mcp-eval-${RUN_ID}"
-        LABEL_RUN_ID=$(echo "$(params.pipeline-run-id)" | sed 's/[^a-zA-Z0-9._-]/_/g' | cut -c1-63)
+        LABEL_RUN_ID=$(printf '%s' "$PIPELINE_RUN_ID" | sed 's/[^a-zA-Z0-9._-]/_/g' | cut -c1-63)
         echo "Namespace: $NAMESPACE"
 
         cat <<EOF | oc apply -f -
@@ -84,8 +90,8 @@ spec:
           name: mcp-eval-ephemeral-access
         subjects:
           - kind: ServiceAccount
-            name: $(params.pipeline-sa-name)
-            namespace: $(params.pipeline-sa-namespace)
+            name: $PIPELINE_SA_NAME
+            namespace: $PIPELINE_SA_NAMESPACE
         EOF
         echo "Granted ephemeral access in namespace"
         echo ""
