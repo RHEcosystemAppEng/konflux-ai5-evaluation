@@ -13,7 +13,7 @@ to the Evaluation-results database is still handled by the pipeline layer later;
 this writes local JSON only.
 
 Usage:
-    python -m scripts.mcp.runners.conformance_eval_gate --results-dir <dir> --reports-dir <dir> [--mode block|warn]
+    python -m scripts.runners.conformance_eval_gate --results-dir <dir> --reports-dir <dir> [--mode block|warn]
 """
 
 from __future__ import annotations

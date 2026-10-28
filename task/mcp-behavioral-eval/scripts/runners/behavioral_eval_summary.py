@@ -5,7 +5,7 @@ Reads the detailed MCPCheckerResult and writes a unified summary matching
 the static/conformance eval format for cross-phase consistency.
 
 Usage:
-    python -m scripts.mcp.runners.behavioral_eval_summary --results-dir <dir> --report-dir <dir>
+    python -m scripts.runners.behavioral_eval_summary --results-dir <dir> --report-dir <dir>
 """
 
 from __future__ import annotations

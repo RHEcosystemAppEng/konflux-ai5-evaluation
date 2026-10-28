@@ -22,7 +22,7 @@ spec:
               mkdir -p "$REPORTS_DIR"
 
               echo "=== Conformance evaluation live probe against ${SERVER_URL} ==="
-              python -m scripts.mcp.probes.conformance_eval_probe \
+              python -m scripts.probes.conformance_eval_probe \
                 --server-url "${SERVER_URL}" \
                 --reports-dir "$REPORTS_DIR" \
                 --timeout "${TIMEOUT}" \
@@ -41,7 +41,7 @@ spec:
               else
                 echo "No Compass source configured; consumed checks will report not_evaluated."
               fi
-              python -m scripts.mcp.probes.conformance_eval_compass_probe \
+              python -m scripts.probes.conformance_eval_compass_probe \
                 --reports-dir "$REPORTS_DIR" "${COMPASS_ARGS[@]}"
 
               echo "=== Probe reports ==="

@@ -9,4 +9,8 @@
 ### Added
 
 - Initial version.
-- Creates an ephemeral namespace on the target cluster and grants pipeline SA access.
+- Creates an `mcp-eval-<run-id>` ephemeral namespace on the target cluster
+  for isolated MCP server evaluation.
+- Grants the pipeline ServiceAccount access via a RoleBinding to the
+  `mcp-eval-ephemeral-access` ClusterRole, with configurable SA name
+  and namespace.

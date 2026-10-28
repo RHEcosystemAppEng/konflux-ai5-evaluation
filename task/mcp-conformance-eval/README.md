@@ -17,6 +17,8 @@ probes as a Kubernetes Job on the target cluster.
 | timeout | Per-request HTTP timeout (seconds) | `30` | false |
 | job-timeout | Timeout for probe Job (seconds) | `300` | false |
 | openapi-url | Explicit OpenAPI contract URL | `""` | false |
+| mcp-path | URL path suffix for MCP Streamable HTTP endpoint | `/mcp` | false |
+| secrets-namespace | Namespace on target cluster where Compass secret is stored | `default` | false |
 | compass-secret | Secret name for Compass SoundCheck credentials | `mcp-eval-compass` | false |
 | job-template | Path to K8s Job template inside the image | `/opt/templates/mcp-conformance-eval-job.yaml` | false |
 
@@ -36,9 +38,13 @@ probes as a Kubernetes Job on the target cluster.
 
 ## Secrets
 
-| Secret (param) | Keys | Purpose |
-|---|---|---|
-| `compass-secret` (default `mcp-eval-compass`) | `api-key`, `compass-url`, `entity-ref` | Compass SoundCheck credentials, copied into the ephemeral namespace for probe use. |
+Secrets are read from the **target test cluster** (in the namespace
+specified by `secrets-namespace`, default `default`) and copied into the
+ephemeral evaluation namespace.
+
+| Secret (param) | Keys | Source | Purpose |
+|---|---|---|---|
+| `compass-secret` (default `mcp-eval-compass`) | `api-key`, `compass-url`, `entity-ref` | Target cluster (`secrets-namespace`) | Compass SoundCheck credentials for conformance probe use. |
 
 ## Usage
 

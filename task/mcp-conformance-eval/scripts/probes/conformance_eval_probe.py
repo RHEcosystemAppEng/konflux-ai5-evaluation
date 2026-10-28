@@ -10,10 +10,10 @@ CLI wrapper that creates the client, invokes the checks, and writes results.
 
 Checks that Compass already collects as real automated facts (tool-name rules,
 OAuth match) are NOT probed here — they are consumed via
-``scripts/mcp/probes/conformance_eval_compass_probe.py`` instead.
+``scripts/probes/conformance_eval_compass_probe.py`` instead.
 
 Usage:
-    python -m scripts.mcp.probes.conformance_eval_probe --server-url http://<service>:8080/mcp \
+    python -m scripts.probes.conformance_eval_probe --server-url http://<service>:8080/mcp \
         --reports-dir <dir> [--timeout 30] [--openapi-url URL]
 """
 

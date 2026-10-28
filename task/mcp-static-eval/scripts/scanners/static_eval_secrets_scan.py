@@ -5,7 +5,7 @@ Runs gitleaks over an MCP server repository (static working-tree scan, no live
 verification) and normalizes its output into secrets-scan.json for SecretsGate.
 
 Usage:
-    python -m scripts.mcp.scanners.static_eval_secrets_scan <target_dir> --reports-dir <dir>
+    python -m scripts.scanners.static_eval_secrets_scan <target_dir> --reports-dir <dir>
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 from abevalflow.mcp.helpers import make_finding
-from scripts.mcp.scanners.helpers import run_tool, write_scan
+from scripts.scanners.helpers import run_tool, write_scan
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

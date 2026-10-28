@@ -9,4 +9,8 @@
 ### Added
 
 - Initial version.
-- Runs three static checks (gitleaks, semgrep, licensee) against MCP server source.
+- Runs three language-agnostic static checks against MCP server source
+  before deployment: secrets management (gitleaks), no user-provided code
+  execution (semgrep), and license compliance (licensee).
+- Gate enforcement modes: block, warn, or disabled.
+- Configurable allowed SPDX license IDs.

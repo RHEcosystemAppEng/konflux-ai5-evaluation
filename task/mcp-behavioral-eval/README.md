@@ -13,12 +13,12 @@ configurable task suites.
 | service-name | K8s Service name of deployed MCP server | `mcp-server` | false |
 | service-port | Port MCP server listens on | `8080` | false |
 | job-timeout | Timeout for mcpchecker Job (seconds) | `1800` | false |
-| pass-threshold | Minimum score for pass (0.0--1.0) | `0.7` | false |
 | llm-agent-secret | Secret name for LLM agent credentials | `mcp-eval-llm-agent` | false |
 | llm-judge-secret | Secret name for judge LLM model | `mcp-eval-llm-judge` | false |
 | llm-ca-secret | Secret name for CA cert bundle for internal LLM endpoints | `mcp-eval-llm-ca` | false |
 | mcp-eval-image | MCP eval image with mcpchecker and pipeline code | `quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1` | false |
 | job-template | Path to Job template inside the image | `/opt/templates/mcp-behavioral-eval-job.yaml` | false |
+| secrets-namespace | Namespace on the target cluster where LLM secrets are stored | `default` | false |
 | pipeline-run-id | Pipeline run ID for provenance | | true |
 | submission-name | Component name being evaluated | | true |
 
@@ -26,8 +26,12 @@ configurable task suites.
 
 | name | description |
 |---|---|
-| eval-passed | `true` if behavioral eval passed threshold, `false` otherwise, `error` on failure. |
+| eval-passed | `true` if behavioral eval passed the pass threshold, `false` otherwise, `error` on failure. |
 | report-path | Workspace-relative path to the generated reports directory. |
+
+The pass threshold is currently hardcoded to **0.7** (70%) inside the
+`abevalflow` library and is not yet configurable per task. A configurable
+`pass-threshold` parameter will be added in a future version.
 
 ## Workspaces
 
@@ -38,11 +42,15 @@ configurable task suites.
 
 ## Secrets
 
-| Secret (param) | Keys | Purpose |
-|---|---|---|
-| `llm-agent-secret` (default `mcp-eval-llm-agent`) | `openai-api-key`, `openai-base-url`, `anthropic-api-key`, `anthropic-base-url`, `model-name` | LLM agent credentials for mcpchecker. |
-| `llm-judge-secret` (default `mcp-eval-llm-judge`) | `model` | Judge LLM model name. |
-| `llm-ca-secret` (default `mcp-eval-llm-ca`) | `ca.crt` | CA certificate bundle for internal LLM endpoints. |
+Secrets are read from the **target test cluster** (in the namespace
+specified by `secrets-namespace`, default `default`) and copied into the
+ephemeral evaluation namespace.
+
+| Secret (param) | Keys | Source | Purpose |
+|---|---|---|---|
+| `llm-agent-secret` (default `mcp-eval-llm-agent`) | `openai-api-key`, `openai-base-url`, `anthropic-api-key`, `anthropic-base-url`, `model-name` | Target cluster (`secrets-namespace`) | LLM agent credentials for mcpchecker. |
+| `llm-judge-secret` (default `mcp-eval-llm-judge`) | `model` | Target cluster (`secrets-namespace`) | Judge LLM model name. |
+| `llm-ca-secret` (default `mcp-eval-llm-ca`) | `ca.crt` | Target cluster (`secrets-namespace`) | CA certificate bundle for internal LLM endpoints. |
 
 ## Usage
 

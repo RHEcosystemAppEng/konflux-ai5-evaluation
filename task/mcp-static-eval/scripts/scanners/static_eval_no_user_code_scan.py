@@ -15,7 +15,7 @@ still honors a committed ``.semgrepignore``, so its mere presence is flagged as 
 high-severity finding - which fails a blocking gate - rather than being trusted.
 
 Usage:
-    python -m scripts.mcp.scanners.static_eval_no_user_code_scan <target_dir> --reports-dir <dir>
+    python -m scripts.scanners.static_eval_no_user_code_scan <target_dir> --reports-dir <dir>
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 from abevalflow.mcp.helpers import make_finding
-from scripts.mcp.scanners.helpers import run_tool, write_scan
+from scripts.scanners.helpers import run_tool, write_scan
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

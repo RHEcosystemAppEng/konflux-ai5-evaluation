@@ -11,7 +11,7 @@
 #               <passed-result-path> <report-rel> <report-path-result>
 set -uo pipefail
 
-GATE_MODULE="$1"        # e.g. scripts.mcp.runners.static_eval_gate
+GATE_MODULE="$1"        # e.g. scripts.runners.static_eval_gate
 RESULTS_DIR="$2"        # absolute results dir for this submission/evaluation (input scans)
 REPORTS_DIR="$3"        # absolute reports dir for this submission/evaluation (output summaries)
 MODE="$4"               # block | warn | disabled
@@ -33,6 +33,6 @@ if ! python3 -c "import json,sys;print(str(json.load(open(sys.argv[1]))['passed'
   echo "run_gate: gate summary $SUMMARY is missing or has no 'passed' key" >&2
   exit 1
 fi
-printf '%s' "$REPORT_REL" > "$REPORT_PATH_RESULT"
+printf '%s' "$REPORT_REL" > "$REPORT_PATH_RESULT" || exit 1
 
 exit "$GATE_EXIT"

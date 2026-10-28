@@ -11,7 +11,7 @@ Reporting stub: the three-state Evaluation-results-database writer is added by t
 pipeline layer later; static evaluation checks are pass/fail only.
 
 Usage:
-    python -m scripts.mcp.runners.static_eval_gate --results-dir <dir> --reports-dir <dir> [--mode block|warn]
+    python -m scripts.runners.static_eval_gate --results-dir <dir> --reports-dir <dir> [--mode block|warn]
 """
 
 from __future__ import annotations

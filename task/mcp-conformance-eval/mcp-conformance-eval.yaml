@@ -21,7 +21,7 @@ spec:
       default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
       description: >-
         MCP eval image with the probe dependencies (httpx, pydantic, pyyaml) and
-        the pipeline code (scripts.mcp, abevalflow.mcp) baked in at PYTHONPATH=/opt.
+        the pipeline code (scripts, abevalflow.mcp) baked in at PYTHONPATH=/opt.
     - name: namespace-name
       type: string
       description: Ephemeral namespace where the MCP server is deployed
@@ -52,11 +52,24 @@ spec:
         Explicit OpenAPI contract URL for the openapi-conformance check. Empty
         probes well-known paths on the server root; a server publishing no
         reachable contract fails the check (ADR baseline requirement).
+    - name: mcp-path
+      type: string
+      default: "/mcp"
+      description: >-
+        URL path suffix appended to the service endpoint for the MCP
+        Streamable HTTP transport. The MCP spec mandates /mcp but some
+        servers may mount the endpoint at a different path.
+    - name: secrets-namespace
+      type: string
+      default: "default"
+      description: >-
+        Namespace on the target cluster where the Compass secret is
+        stored. Defaults to the default namespace.
     - name: compass-secret
       type: string
       default: "mcp-eval-compass"
       description: >-
-        Name of a Secret on the target cluster (in the default namespace)
+        Name of a Secret on the target cluster (in the secrets-namespace)
         containing Compass SoundCheck credentials. Keys: api-key,
         compass-url, entity-ref. Copied into the ephemeral namespace.
         If empty or the secret does not exist, Compass-consumed checks
@@ -92,7 +105,7 @@ spec:
         - name: JOB_TIMEOUT
           value: $(params.job-timeout)
         - name: SERVER_URL
-          value: http://$(params.service-name):$(params.service-port)/mcp
+          value: http://$(params.service-name):$(params.service-port)$(params.mcp-path)
         - name: TIMEOUT
           value: $(params.timeout)
         - name: OPENAPI_URL
@@ -133,7 +146,7 @@ spec:
 
         # Copy Compass secret into ephemeral namespace if it exists
         if [ -n "$COMPASS_SECRET" ]; then
-          if oc get secret "$COMPASS_SECRET" -n default -o yaml \
+          if oc get secret "$COMPASS_SECRET" -n "$(params.secrets-namespace)" -o yaml \
             | sed '/^\s*namespace:/d; /^\s*uid:/d; /^\s*resourceVersion:/d; /^\s*creationTimestamp:/d' \
             | oc apply -n "$NAMESPACE" -f - 2>/dev/null; then
             echo "Copied Compass secret '$COMPASS_SECRET' into $NAMESPACE"
@@ -217,8 +230,8 @@ spec:
         REPORTS_DIR="$(workspaces.source.path)/reports"
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
-        bash /opt/scripts/mcp/gate_wrapper.sh \
-          scripts.mcp.runners.conformance_eval_gate \
+        bash /opt/scripts/gate_wrapper.sh \
+          scripts.runners.conformance_eval_gate \
           "$RESULTS_DIR" \
           "$REPORTS_DIR" \
           "$MODE" \

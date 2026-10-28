@@ -16,11 +16,11 @@ Mapping logic lives in ``abevalflow.mcp.checks.conformance_eval_compass_checks``
 thin CLI wrapper that handles I/O (file reads, HTTP calls) and writes results.
 
 Usage (file mode):
-    python -m scripts.mcp.probes.conformance_eval_compass_probe \\
+    python -m scripts.probes.conformance_eval_compass_probe \\
         --facts-file facts.json --reports-dir <dir>
 
 Usage (live mode):
-    python -m scripts.mcp.probes.conformance_eval_compass_probe \\
+    python -m scripts.probes.conformance_eval_compass_probe \\
         --compass-url https://compass.stage.redhat.com/api/soundcheck \\
         --entity-ref mcpserver:redhat/my-server \\
         --reports-dir <dir>

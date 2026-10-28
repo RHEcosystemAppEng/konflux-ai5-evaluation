@@ -12,6 +12,8 @@ Intended to be cleaned up by
 |---|---|---|---|
 | pipeline-run-id | Pipeline run ID, used to generate a unique namespace name | | true |
 | backend-endpoints | Retained for compatibility, not used | `""` | false |
+| pipeline-sa-name | ServiceAccount name to grant access in ephemeral namespace | `mcp-eval-pipeline` | false |
+| pipeline-sa-namespace | Namespace of the pipeline ServiceAccount | `default` | false |
 
 ## Results
 

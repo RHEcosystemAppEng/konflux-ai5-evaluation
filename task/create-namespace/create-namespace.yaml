@@ -21,6 +21,18 @@ spec:
       description: >-
         Retained for pipeline compatibility. NetworkPolicy restrictions are
         currently disabled and this parameter is not used.
+    - name: pipeline-sa-name
+      type: string
+      default: "mcp-eval-pipeline"
+      description: >-
+        ServiceAccount name in the pipeline namespace to grant access
+        in the ephemeral namespace via RoleBinding.
+    - name: pipeline-sa-namespace
+      type: string
+      default: "default"
+      description: >-
+        Namespace of the pipeline ServiceAccount to reference in the
+        ephemeral namespace RoleBinding.
   workspaces:
     - name: target-kubeconfig
       description: >-
@@ -72,8 +84,8 @@ spec:
           name: mcp-eval-ephemeral-access
         subjects:
           - kind: ServiceAccount
-            name: mcp-eval-pipeline
-            namespace: default
+            name: $(params.pipeline-sa-name)
+            namespace: $(params.pipeline-sa-namespace)
         EOF
         echo "Granted ephemeral access in namespace"
         echo ""

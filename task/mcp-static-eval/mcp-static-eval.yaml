@@ -18,7 +18,7 @@ spec:
       default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
       description: >-
         MCP eval image with the scanners (gitleaks, semgrep, licensee) and the
-        pipeline code (scripts.mcp, abevalflow.mcp) baked in at PYTHONPATH=/opt.
+        pipeline code (scripts, abevalflow.mcp) baked in at PYTHONPATH=/opt.
     - name: source-subdir
       type: string
       default: "."
@@ -80,10 +80,10 @@ spec:
         done
 
         echo "=== Static evaluation scanners on $SOURCE_DIR ==="
-        python -m scripts.mcp.scanners.static_eval_secrets_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
-        python -m scripts.mcp.scanners.static_eval_no_user_code_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
+        python -m scripts.scanners.static_eval_secrets_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
+        python -m scripts.scanners.static_eval_no_user_code_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
         # shellcheck disable=SC2086
-        python -m scripts.mcp.scanners.static_eval_license_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR" $LICENSE_ARGS
+        python -m scripts.scanners.static_eval_license_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR" $LICENSE_ARGS
 
     - name: gate
       image: $(params.mcp-eval-image)
@@ -100,8 +100,8 @@ spec:
 
         # Shared gate wrapper (baked in the image): runs the gate module, emits the
         # Tekton results from the summary, and propagates the gate's exit code.
-        bash /opt/scripts/mcp/gate_wrapper.sh \
-          scripts.mcp.runners.static_eval_gate \
+        bash /opt/scripts/gate_wrapper.sh \
+          scripts.runners.static_eval_gate \
           "$RESULTS_DIR" \
           "$REPORTS_DIR" \
           "$MODE" \

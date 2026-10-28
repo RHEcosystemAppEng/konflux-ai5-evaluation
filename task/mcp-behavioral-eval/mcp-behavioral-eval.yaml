@@ -28,12 +28,6 @@ spec:
       type: string
       default: "1800"
       description: Timeout in seconds for the mcpchecker Job
-    - name: pass-threshold
-      type: string
-      default: "0.7"
-      description: >-
-        Minimum overall score (0.0–1.0) for a pass recommendation.
-        Default 0.7 per ADR specification.
     - name: llm-agent-secret
       type: string
       default: "mcp-eval-llm-agent"
@@ -65,10 +59,23 @@ spec:
       description: >-
         MCP eval image with mcpchecker binary, task suite files, and
         aggregation scripts baked in.
+    - name: mcp-path
+      type: string
+      default: "/mcp"
+      description: >-
+        URL path suffix appended to the service endpoint for the MCP
+        Streamable HTTP transport. The MCP spec mandates /mcp but some
+        servers may mount the endpoint at a different path.
     - name: job-template
       type: string
       default: "/opt/templates/mcp-behavioral-eval-job.yaml"
       description: Path to the Kubernetes Job template for behavioral evaluation
+    - name: secrets-namespace
+      type: string
+      default: "default"
+      description: >-
+        Namespace on the target cluster where LLM secrets (agent, judge,
+        CA) are stored. Defaults to the default namespace.
     - name: pipeline-run-id
       type: string
       description: Pipeline run ID for provenance tracking
@@ -102,7 +109,7 @@ spec:
 
         for SECRET_NAME in "$(params.llm-agent-secret)" "$(params.llm-judge-secret)" "$(params.llm-ca-secret)"; do
           if [ -n "$SECRET_NAME" ]; then
-            oc get secret "$SECRET_NAME" -n default -o yaml \
+            oc get secret "$SECRET_NAME" -n "$(params.secrets-namespace)" -o yaml \
               | sed '/^\s*namespace:/d; /^\s*uid:/d; /^\s*resourceVersion:/d; /^\s*creationTimestamp:/d' \
               | oc apply -n "$NAMESPACE" -f - || {
                 echo "WARNING: Could not copy secret '$SECRET_NAME'"
@@ -124,7 +131,7 @@ spec:
         - name: JOB_TIMEOUT
           value: $(params.job-timeout)
         - name: MCP_URL
-          value: http://$(params.service-name):$(params.service-port)
+          value: http://$(params.service-name):$(params.service-port)$(params.mcp-path)
         - name: AGENT_SECRET
           value: $(params.llm-agent-secret)
         - name: JUDGE_SECRET
@@ -247,7 +254,7 @@ spec:
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
         # Write detailed reports to results/
-        python3 /opt/scripts/aggregate_mcpchecker.py \
+        python3 -m scripts.aggregate_mcpchecker \
           --output-json "$OUTPUT_FILE" \
           --submission-name "$(params.submission-name)" \
           --report-dir "$RESULTS_DIR" \
@@ -258,7 +265,7 @@ spec:
           }
 
         # Generate unified behavioral-eval-summary.json directly in reports/
-        python3 -m scripts.mcp.runners.behavioral_eval_summary \
+        python3 -m scripts.runners.behavioral_eval_summary \
           --results-dir "$RESULTS_DIR" \
           --report-dir "$REPORTS_DIR" || echo "WARNING: Failed to generate behavioral-eval-summary.json"
 
