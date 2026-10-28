@@ -1,0 +1,77 @@
+# MCP server evaluation image.
+#
+# Single image for the full MCP evaluation pipeline: static analysis,
+# deterministic conformance testing, and behavioral evaluation (mcpchecker).
+#
+# Layers on top of the agent-eval-harness base image which provides:
+#   - full abevalflow library (gates, schemas, observability, mcp, reports)
+#   - Python 3.12, Node.js, npm, git, tar
+#   - pyyaml (pip)
+#
+# This image adds:
+#   - Helm CLI for MCP server deployment
+#   - mcpchecker binary (from mcpchecker-runner)
+#   - scanning tools: gitleaks, semgrep, licensee
+#   - extra Python deps: pydantic, httpx
+#   - envsubst for runtime MCP_URL injection
+#   - MCP eval scripts, job templates, and behavioral task suites
+#
+# Build from repo root (COPY needs repo-root context):
+#   podman build -t quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1 \
+#     -f containers/mcp-eval/Containerfile .
+
+# ── Stage 1: mcpchecker-runner (source for mcpchecker binary) ──
+FROM quay.io/ecosystem-appeng/mcpchecker-runner:latest AS mcpchecker-runner
+
+# ── Stage 2: Runtime image (agent-eval-harness provides abevalflow + Node.js + pyyaml) ──
+FROM quay.io/ecosystem-appeng/agent-eval-harness:latest
+
+ARG HELM_VERSION=3.16.3
+ARG GITLEAKS_VERSION=8.30.0
+ARG SEMGREP_VERSION=1.179.0
+ARG LICENSEE_VERSION=9.18.0
+ARG PYDANTIC_VERSION=2.13.5
+ARG HTTPX_VERSION=0.28.1
+
+USER 0
+
+# Copy mcpchecker binary from mcpchecker-runner
+COPY --from=mcpchecker-runner /usr/local/bin/mcpchecker /usr/local/bin/mcpchecker
+RUN chmod +x /usr/local/bin/mcpchecker
+
+# MCP eval scripts — Tekton step entry points
+COPY task/mcp-static-eval/scripts      /opt/scripts
+COPY task/mcp-conformance-eval/scripts /opt/scripts
+COPY task/mcp-behavioral-eval/scripts  /opt/scripts
+
+# Behavioral eval: task suites
+COPY task/mcp-behavioral-eval/suites/default /opt/suites/mcp/default
+
+# Kubernetes Job templates for conformance and behavioral evaluation
+COPY task/mcp-conformance-eval/templates /opt/templates
+COPY task/mcp-behavioral-eval/templates  /opt/templates
+
+# /opt for scripts, /opt/agent-eval-harness for abevalflow (from base image)
+ENV PYTHONPATH=/opt:/opt/agent-eval-harness
+
+# Scanning tools and extra Python deps not in the base image.
+# nodejs, npm, pyyaml, git, tar are already provided by agent-eval-harness.
+# licensee's native dep (rugged -> libgit2) needs a build toolchain to compile;
+# install it, build the gem, then drop the toolchain to keep the image lean.
+RUN curl -fsSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
+      | tar -xz -C /usr/local/bin --strip-components=1 linux-amd64/helm \
+ && dnf install -y gettext --nodocs \
+ && curl -LsSf \
+      "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+      | tar -xz -C /usr/local/bin gitleaks \
+ && pip install --no-cache-dir \
+      "semgrep==${SEMGREP_VERSION}" \
+      "pydantic==${PYDANTIC_VERSION}" \
+      "httpx==${HTTPX_VERSION}" \
+ && dnf install -y ruby ruby-devel gcc gcc-c++ make cmake pkgconf-pkg-config openssl-devel \
+ && gem install licensee -v "${LICENSEE_VERSION}" \
+ && dnf remove -y ruby-devel gcc gcc-c++ make cmake pkgconf-pkg-config openssl-devel \
+ && dnf clean all
+
+USER 1001
+WORKDIR /workspace

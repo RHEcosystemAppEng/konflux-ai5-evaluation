@@ -1,0 +1,235 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: deploy-mcp
+  labels:
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  description: >-
+    Deploys an MCP server into the ephemeral evaluation namespace using
+    its Helm chart and test values. The MCP server repository must be
+    pre-cloned into the source workspace (repo-subdir param) by the
+    pipeline's fetch-mcp-repo task. The Helm chart and values-test.yaml
+    must exist at standardized locations in the repository.
+    Credentials are mounted from OCP Secrets, never committed to git.
+    The deployed service is accessible at <service-name>:<service-port>
+    within the namespace.
+  params:
+    - name: namespace-name
+      type: string
+      description: Ephemeral namespace to deploy into
+    - name: component-image
+      type: string
+      description: Built container image reference from the Snapshot
+    - name: mcp-eval-image
+      type: string
+      default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
+      description: >-
+        MCP eval image with Helm, tar, and pipeline tooling baked in.
+        Used for the Helm deployment step.
+    - name: repo-subdir
+      type: string
+      default: "mcp-server-repo"
+      description: >-
+        Subdirectory within the source workspace where the MCP server
+        repository is cloned by the pipeline's fetch-mcp-repo task.
+    - name: service-name
+      type: string
+      default: "mcp-server"
+      description: Kubernetes Service name for the deployed MCP server
+    - name: service-port
+      type: string
+      default: "8080"
+      description: Port on which the MCP server listens
+    - name: helm-chart-path
+      type: string
+      default: "chart"
+      description: Path to the Helm chart directory within the MCP server repo
+    - name: values-test-path
+      type: string
+      default: "values-test.yaml"
+      description: Path to the test values file within the MCP server repo
+    - name: image-helm-key
+      type: string
+      default: "image.repository"
+      description: Helm value key for the container image repository
+    - name: image-ref-helm-key
+      type: string
+      default: "image.ref"
+      description: Helm value key for the container image ref (tag or digest)
+    - name: image-pull-secret-helm-key
+      type: string
+      default: "imagePullSecrets[0].name"
+      description: Helm value key for the image pull secret name
+    - name: image-pull-secret
+      type: string
+      default: "image-pull-secret"
+      description: >-
+        Name of the image pull Secret in the Konflux namespace to copy
+        into the ephemeral namespace for registry authentication.
+    - name: credentials-secrets
+      type: string
+      default: ""
+      description: >-
+        Comma-separated names of Secrets in the Konflux namespace to
+        copy into the ephemeral namespace (e.g. backend API keys).
+        If empty, only the image pull secret is copied.
+  workspaces:
+    - name: source
+      description: Workspace for cloning the MCP server repo
+    - name: target-kubeconfig
+      description: >-
+        Kubeconfig for the target cluster. Must contain a file named
+        "kubeconfig". All oc commands use this to reach the remote cluster.
+  results:
+    - name: mcp-url
+      description: Internal service URL for the deployed MCP server
+    - name: release-name
+      description: Helm release name
+  volumes:
+    - name: pull-secret
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Mi
+  steps:
+    - name: fetch-secrets
+      image: registry.redhat.io/openshift4/ose-cli:latest
+      env:
+        - name: IMAGE_PULL_SECRET
+          value: $(params.image-pull-secret)
+        - name: CREDENTIALS_SECRETS
+          value: $(params.credentials-secrets)
+      volumeMounts:
+        - name: pull-secret
+          mountPath: /tmp/pull-secret
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        PIPELINE_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+
+        ALL_SECRETS="$IMAGE_PULL_SECRET"
+        if [ -n "$CREDENTIALS_SECRETS" ]; then
+          ALL_SECRETS="${ALL_SECRETS},${CREDENTIALS_SECRETS}"
+        fi
+
+        IFS=',' read -ra SECRETS <<< "$ALL_SECRETS"
+        for SECRET_NAME in "${SECRETS[@]}"; do
+          SECRET_NAME=$(echo "$SECRET_NAME" | xargs)
+          echo "Fetching secret '$SECRET_NAME' from $PIPELINE_NS"
+          oc get secret "$SECRET_NAME" -n "$PIPELINE_NS" -o yaml \
+            | sed -e '/^  namespace:/d' -e '/^  uid:/d' -e '/^  resourceVersion:/d' -e '/^  creationTimestamp:/d' \
+            > "/tmp/pull-secret/${SECRET_NAME}.yaml"
+        done
+
+    - name: apply-secrets
+      image: registry.redhat.io/openshift4/ose-cli:latest
+      env:
+        - name: KUBECONFIG
+          value: $(workspaces.target-kubeconfig.path)/kubeconfig
+        - name: NAMESPACE
+          value: $(params.namespace-name)
+      volumeMounts:
+        - name: pull-secret
+          mountPath: /tmp/pull-secret
+          readOnly: true
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        for SECRET_FILE in /tmp/pull-secret/*.yaml; do
+          [ -f "$SECRET_FILE" ] || continue
+          echo "Applying secret $(basename "$SECRET_FILE") to $NAMESPACE"
+          oc apply -n "$NAMESPACE" -f "$SECRET_FILE"
+        done
+
+    - name: deploy-helm
+      image: $(params.mcp-eval-image)
+      imagePullPolicy: Always
+      env:
+        - name: KUBECONFIG
+          value: $(workspaces.target-kubeconfig.path)/kubeconfig
+        - name: NAMESPACE
+          value: $(params.namespace-name)
+        - name: COMPONENT_IMAGE
+          value: $(params.component-image)
+        - name: SERVICE_NAME
+          value: $(params.service-name)
+        - name: SERVICE_PORT
+          value: $(params.service-port)
+        - name: REPO_SUBDIR
+          value: $(params.repo-subdir)
+        - name: HELM_CHART_PATH
+          value: $(params.helm-chart-path)
+        - name: VALUES_TEST_PATH
+          value: $(params.values-test-path)
+        - name: IMAGE_KEY
+          value: $(params.image-helm-key)
+        - name: IMAGE_REF_KEY
+          value: $(params.image-ref-helm-key)
+        - name: IMAGE_PULL_SECRET
+          value: $(params.image-pull-secret)
+        - name: IMAGE_PULL_SECRET_HELM_KEY
+          value: $(params.image-pull-secret-helm-key)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        echo "=== DEPLOY MCP SERVER ==="
+
+        HELM_CHART="$(workspaces.source.path)/$REPO_SUBDIR/$HELM_CHART_PATH"
+        VALUES_FILE="$(workspaces.source.path)/$REPO_SUBDIR/$VALUES_TEST_PATH"
+        RELEASE_NAME="mcp-eval"
+
+        echo "Namespace: $NAMESPACE"
+        echo "Image: $COMPONENT_IMAGE"
+        echo "Helm chart: $HELM_CHART"
+        echo "Values file: $VALUES_FILE"
+
+        if [ ! -d "$HELM_CHART" ]; then
+          echo "ERROR: Helm chart not found at $HELM_CHART"
+          exit 1
+        fi
+
+        if [ ! -f "$VALUES_FILE" ]; then
+          echo "ERROR: values-test.yaml not found at $VALUES_FILE"
+          exit 1
+        fi
+
+        if [ -z "$COMPONENT_IMAGE" ]; then
+          echo "ERROR: No Konflux-generated component image found"
+          exit 1
+        fi
+
+        if [[ "$COMPONENT_IMAGE" == *"@"* ]]; then
+          IMAGE_REPO="${COMPONENT_IMAGE%%@*}"
+          IMAGE_REF="${COMPONENT_IMAGE#*@}"
+        elif [[ "$COMPONENT_IMAGE" == *":"* ]]; then
+          IMAGE_REPO="${COMPONENT_IMAGE%:*}"
+          IMAGE_REF="${COMPONENT_IMAGE##*:}"
+        else
+          echo "ERROR: Konflux-generated image is invalid, cannot split into repo and ref: $COMPONENT_IMAGE"
+          exit 1
+        fi
+
+        # shellcheck disable=SC2153  # IMAGE_KEY, IMAGE_REF_KEY, IMAGE_PULL_SECRET_HELM_KEY are env vars
+        HELM_SETS="--set ${IMAGE_KEY}=${IMAGE_REPO} --set ${IMAGE_REF_KEY}=${IMAGE_REF} --set ${IMAGE_PULL_SECRET_HELM_KEY}=${IMAGE_PULL_SECRET}"
+        echo "Image override: repo=${IMAGE_REPO} ref=${IMAGE_REF}"
+        echo "Image pull secret: ${IMAGE_PULL_SECRET}"
+
+        echo "Deploying Helm release: $RELEASE_NAME"
+        # shellcheck disable=SC2086  # HELM_SETS must word-split into separate arguments
+        helm upgrade --install "$RELEASE_NAME" "$HELM_CHART" \
+          --namespace "$NAMESPACE" \
+          --values "$VALUES_FILE" \
+          $HELM_SETS \
+          --wait=false
+
+        echo "Helm release deployed"
+
+        MCP_URL="http://${SERVICE_NAME}.${NAMESPACE}.svc:${SERVICE_PORT}"
+        echo "MCP URL: $MCP_URL"
+
+        echo -n "$MCP_URL" > "$(results.mcp-url.path)"
+        echo -n "$RELEASE_NAME" > "$(results.release-name.path)"
+
+        echo "=== Deploy complete ==="
