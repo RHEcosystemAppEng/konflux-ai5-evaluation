@@ -28,13 +28,21 @@ class TaskContracts(unittest.TestCase):
         script = STEPS["attach-oci-reports"]["script"]
         for expected in ("select-oci-auth", "retry oras attach", "oci-attachment.json"):
             self.assertIn(expected, script)
-        self.assertEqual(STEPS["package-oci-reports"]["command"], ["abeval", "batch-package"])
+        package = STEPS["package-oci-reports"]
+        self.assertEqual(package["command"], ["bash", "-c"])
+        self.assertIn('abeval batch-package --batch-dir "$ABEVAL_OUTPUT"', package["args"][0])
 
     def test_tls_mode_is_an_explicit_cli_setting(self):
         params = {p["name"]: p for p in TASK["params"]}
         self.assertEqual(params["insecure-ssl"]["default"], "false")
         env = {e["name"]: e for e in STEPS["evaluate"]["env"]}
         self.assertEqual(env["ABEVAL_INSECURE_SSL"]["value"], "$(params.insecure-ssl)")
+
+    def test_trial_case_concurrency_is_configurable(self):
+        params = {p["name"]: p for p in TASK["params"]}
+        env = {e["name"]: e for e in STEPS["evaluate"]["env"]}
+        self.assertEqual(params["n-concurrent"]["default"], "1")
+        self.assertEqual(env["ABEVAL_N_CONCURRENT"]["value"], "$(params.n-concurrent)")
 
     def test_registration_consumes_manifest_and_evidence_workspace(self):
         task = yaml.safe_load((ROOT / "task/update-registered-shas/update-registered-shas.yaml").read_text())["spec"]
@@ -82,6 +90,16 @@ class ExecutableTaskSmoke(unittest.TestCase):
         emitted = self.execute("emit-results", [])
         self.assertEqual(emitted.returncode, 0, emitted.stderr)
         self.assertEqual(json.loads((self.batch / "summary.json").read_text())["items"], [])
+
+    def test_packaged_archive_is_accessible_to_the_attachment_image_uid(self):
+        import stat
+
+        self.assertEqual(self.execute("evaluate", []).returncode, 0)
+        packaged = self.execute("package-oci-reports", [])
+        self.assertEqual(packaged.returncode, 0, packaged.stderr)
+        self.assertEqual(stat.S_IMODE((self.batch / "reports.tar.gz").stat().st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE(self.batch.stat().st_mode), 0o733)
+        self.assertEqual(stat.S_IMODE(self.batch.parent.stat().st_mode), 0o711)
 
     def test_missing_skill_emits_error_and_gates_after_evaluation(self):
         self.assertEqual(self.execute("evaluate", ["pack/missing"]).returncode, 3)

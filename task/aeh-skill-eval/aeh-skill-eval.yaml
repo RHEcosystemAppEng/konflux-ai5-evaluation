@@ -5,7 +5,7 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: 2.0.1
+    app.kubernetes.io/version: 2.1.3
 spec:
   description: >-
     Evaluate changed skills sequentially through one abeval batch invocation.
@@ -27,11 +27,15 @@ spec:
       description: >-
         Complete CLI image with both scanners, unchanged AEH runtime, model clients,
         and storage clients.
-      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-runner@sha256:cd70287e9cb68ab36b0f150635ed07c89cc2fbbdc910118d2efb27e52c95f77d
+      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.5-runner@sha256:961abe053e959ac0f4d3cf849cdd86f06a27368128ca902aaabced092932d12e
     - name: tiers
       type: string
       default: '1'
       description: 'Evaluation tiers passed directly to the CLI: 1, 2, or 1,2.'
+    - name: n-concurrent
+      type: string
+      default: '1'
+      description: Maximum concurrent AEH trial cases.
     - name: aeh-image
       type: string
       description: Trial image pullable by the workload cluster; used for Tier 2.
@@ -79,7 +83,7 @@ spec:
       default: 'false'
     - name: insecure-ssl
       type: string
-      description: Skip certificate verification for evaluation clients and the database TLS route; Kubernetes API verification is unchanged.
+      description: Skip certificate verification for evaluation clients, Compass publishing, and the database TLS route; Kubernetes API verification is unchanged.
       default: 'false'
     - name: submission-review
       type: string
@@ -227,6 +231,8 @@ spec:
           value: $(params.agent-api-base)
         - name: ABEVAL_INSECURE_SSL
           value: $(params.insecure-ssl)
+        - name: ABEVAL_N_CONCURRENT
+          value: $(params.n-concurrent)
         - name: ABEVAL_LLM_MODEL
           value: $(params.llm-model)
         - name: ABEVAL_SKILL_REVIEW

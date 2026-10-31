@@ -1,5 +1,24 @@
 # CLI task migration (1.0.0)
 
+## Score summaries, evidence schema, and trial concurrency (evaluation 2.1.3, CLI 0.5.0)
+
+Use `v1.0.5-runner` with the existing `v1.0.2-trial` image, both pinned by
+digest. Upgrade the evaluation task bundle to `2.1.3`; discovery, label checking,
+and registration retain their existing interfaces and versions.
+The task exposes `n-concurrent` for maximum concurrent AEH trial cases; the
+agentic-plugins pipelines set it to `2`.
+
+Configure PostgreSQL publication against a fresh evidence schema v2 database.
+The CLI rejects the old schema and does not delete or migrate it. Evaluation
+records include plugin/skill identity, commit SHA, the built content image,
+linked arm/case/judge scores, pairwise outcomes, severity counts, and S3 evidence
+references. The task passes `image-url@image-digest` as `ABEVAL_BUILT_IMAGE_REF`
+for each evaluated skill whenever a built component image is available.
+
+S3 report keys now include the plugin: `<plugin>/<skill>/<run-id>/reports/`.
+Publication status remains in `run.json`. Skill loading, trial execution, and
+the registration contract are unchanged.
+
 ## Sequential batch upgrade (evaluation 2.0.0, registration 1.0.0)
 
 Use the `v1.0.1-runner` image with CLI 0.4.0 and the versioned batch evaluation

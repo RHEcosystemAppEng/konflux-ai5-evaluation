@@ -1,9 +1,24 @@
 # Changelog
 
-## Unreleased: evidence schema v2 integration
+## 2.1.3
+
+- Pin `v1.0.5-runner` with explicit scoring breakdowns and absolute treatment reward gates.
+- Apply the existing opt-in `insecure-ssl` setting to Compass fact publishing.
+
+## 2.1.2
+
+- Pin the updated CLI runner with clearer aggregate aspect scores and persisted score breakdowns.
+
+## 2.1.1
+
+- Expose the CLI's maximum concurrent AEH trial case setting as `n-concurrent`.
+
+## 2.1.0
 
 - Pass the digest-pinned built component image to CLI 0.5.0 as `ABEVAL_BUILT_IMAGE_REF` for each evaluated skill.
-- Keep existing published runner defaults until a runner containing the new CLI is released.
+- Pin the `v1.0.3-runner` image with CLI 0.5.0, PostgreSQL evidence schema v2, linked arm/case/judge scores, severity counts, and S3 artifact references.
+- Retain the `v1.0.2-trial` runtime; PostgreSQL publication requires a fresh schema v2 database.
+- Make packaged evidence accessible to the OCI attachment image's UID and keep the attachment result readable by the CLI.
 
 ## 2.0.1
 

@@ -66,9 +66,10 @@ spec:
           workspace: evaluation
 ```
 
-In production, resolve published bundles by digest: evaluation `2.0.0`,
+In production, resolve published bundles by digest: evaluation `2.1.3`,
 registration `1.0.0`, and discovery `0.1.0`. The default images use
-`v1.0.1-runner` and the unchanged `v1.0-trial`, pinned by digest. Supply existing Secrets and a trusted source artifact as documented by
+`v1.0.5-runner` (CLI 0.5.0) and `v1.0.2-trial`, pinned by digest. PostgreSQL
+publication requires a fresh evidence schema v2 database. Supply existing Secrets and a trusted source artifact as documented by
 the task. Add component `image-url`/`image-digest` to require OCI attachment.
 PipelineRun timeouts must exceed the evaluation task's batch duration; the
 agentic-plugins pipelines use a 24-hour overall budget, 23-hour tasks budget,
