@@ -19,8 +19,17 @@ def _get_fact_schema() -> dict:
     return _FACT_SCHEMA
 
 
-def validate_compass_fact_file(path: Path) -> dict:
-    """Return a parsed fact document after validating it against the schema."""
-    data = json.loads(path.read_text())
+def validate_compass_fact_file(path: Path, data: dict | None = None) -> dict:
+    """Return a parsed fact document after validating it against the schema.
+
+    Args:
+        path: Path to the fact file (used for reading if data is None)
+        data: Pre-loaded fact data to validate. If None, reads from path.
+
+    Returns:
+        The validated fact data.
+    """
+    if data is None:
+        data = json.loads(path.read_text())
     jsonschema.validate(data, _get_fact_schema())
     return data

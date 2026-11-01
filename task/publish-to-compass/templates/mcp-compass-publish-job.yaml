@@ -25,37 +25,46 @@ spec:
               from scripts.compass_fact_validator import validate_compass_fact_file
 
               facts_dir = Path("/mnt/facts")
-              compass_url = os.environ.get("COMPASS_URL", "")
-              api_key = os.environ.get("COMPASS_API_KEY", "")
-              entity_ref = os.environ.get("COMPASS_ENTITY_REF", "")
+              compass_url = os.environ["COMPASS_URL"]
+              api_key = os.environ["COMPASS_API_KEY"]
+              entity_ref = os.environ["COMPASS_ENTITY_REF"]
               dry_run = os.environ.get("DRY_RUN", "true") != "false"
+
+              if not compass_url or not api_key or not entity_ref:
+                  print("ERROR: COMPASS_URL, COMPASS_API_KEY, and COMPASS_ENTITY_REF must have non-empty values", file=sys.stderr)
+                  sys.exit(1)
 
               files = sorted(facts_dir.glob("*.json"))
               if not files:
                   print("ERROR: No fact files found", file=sys.stderr)
                   sys.exit(1)
 
-              if not dry_run and (not compass_url or not api_key or not entity_ref):
-                  print("ERROR: COMPASS_URL, COMPASS_API_KEY, and COMPASS_ENTITY_REF required for live publish", file=sys.stderr)
-                  sys.exit(1)
-
               mode = "DRY RUN" if dry_run else "LIVE"
               failed = 0
               print(f"=== Compass publish ({mode}): {len(files)} fact(s) ===")
               for f in files:
+                  # Load and populate entityRef
+                  with open(f) as fp:
+                      file_data = json.load(fp)
+                  for fact in file_data.get("facts", []):
+                      if not fact.get("entityRef"):
+                          fact["entityRef"] = entity_ref
+
+                  # Validate after populating entityRef
                   try:
-                      fact_data = validate_compass_fact_file(f)
+                      validate_compass_fact_file(f, file_data)
                   except Exception as e:
                       print(f"SKIP {f.name}: schema validation failed: {e}")
                       failed += 1
                       continue
 
-                  fact_ref = fact_data["factRef"]
-                  payload = {"facts": [{"factRef": fact_ref, "entityRef": entity_ref, "data": fact_data["data"]}]}
+                  # Prepare payload
+                  fact_refs = ", ".join(fact["factRef"] for fact in file_data["facts"])
+                  payload = file_data
                   data = json.dumps(payload).encode()
 
                   if dry_run:
-                      print(f"[DRY RUN] Would POST {fact_ref} ({len(data)} bytes)")
+                      print(f"[DRY RUN] Would POST {fact_refs} ({len(data)} bytes)")
                       continue
 
                   req = urllib.request.Request(
@@ -64,12 +73,12 @@ spec:
                   )
                   try:
                       with urllib.request.urlopen(req, timeout=30) as resp:
-                          print(f"OK   {fact_ref} (HTTP {resp.status})")
+                          print(f"OK   {fact_refs} (HTTP {resp.status})")
                   except urllib.error.HTTPError as e:
-                      print(f"FAIL {fact_ref} (HTTP {e.code}: {e.reason})")
+                      print(f"FAIL {fact_refs} (HTTP {e.code}: {e.reason})")
                       failed += 1
                   except urllib.error.URLError as e:
-                      print(f"FAIL {fact_ref} ({e.reason})")
+                      print(f"FAIL {fact_refs} ({e.reason})")
                       failed += 1
 
               total = len(files)
@@ -89,19 +98,19 @@ spec:
                 secretKeyRef:
                   name: ${COMPASS_SECRET}
                   key: api-key
-                  optional: true
+                  optional: false
             - name: COMPASS_URL
               valueFrom:
                 secretKeyRef:
                   name: ${COMPASS_SECRET}
                   key: compass-url
-                  optional: true
+                  optional: false
             - name: COMPASS_ENTITY_REF
               valueFrom:
                 secretKeyRef:
                   name: ${COMPASS_SECRET}
                   key: entity-ref
-                  optional: true
+                  optional: false
           volumeMounts:
             - name: facts
               mountPath: /mnt/facts

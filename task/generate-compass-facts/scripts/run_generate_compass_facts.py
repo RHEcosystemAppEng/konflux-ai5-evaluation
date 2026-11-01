@@ -8,7 +8,7 @@ is a pure transformation step.  The publishing task injects entityRef
 from the Compass secret before POSTing.
 
 Usage:
-    python -m scripts.mcp.runners.generate_compass_facts \
+    python -m scripts.run_generate_compass_facts \
         --summary-dir reports \
         --output-dir facts
 """
@@ -20,11 +20,8 @@ import logging
 import sys
 from pathlib import Path
 
-from scripts.fact_generator import (
-    build_mcp_eval_result,
-    generate_mcp_eval_fact_files,
-    load_phase_summary,
-)
+from scripts.generator import generate_mcp_eval_fact_files
+from scripts.load_summary import build_mcp_eval_result, load_phase_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
