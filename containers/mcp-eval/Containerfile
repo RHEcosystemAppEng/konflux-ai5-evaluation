@@ -14,7 +14,7 @@
 #   - scanning tools: gitleaks, semgrep, licensee
 #   - extra Python deps: pydantic, httpx
 #   - envsubst for runtime MCP_URL injection
-#   - MCP eval scripts, job templates, and behavioral task suites
+#   - MCP eval and Compass fact scripts, schemas, job templates, and suites
 #
 # Build from repo root (COPY needs repo-root context):
 #   podman build -t quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1 \
@@ -32,6 +32,7 @@ ARG SEMGREP_VERSION=1.179.0
 ARG LICENSEE_VERSION=9.18.0
 ARG PYDANTIC_VERSION=2.13.5
 ARG HTTPX_VERSION=0.28.1
+ARG JSONSCHEMA_VERSION=4.23.0
 
 USER 0
 
@@ -43,6 +44,12 @@ RUN chmod +x /usr/local/bin/mcpchecker
 COPY task/mcp-static-eval/scripts      /opt/scripts
 COPY task/mcp-conformance-eval/scripts /opt/scripts
 COPY task/mcp-behavioral-eval/scripts  /opt/scripts
+COPY task/generate-compass-facts/scripts /opt/scripts
+COPY task/publish-to-compass/scripts     /opt/scripts
+
+# Task-owned schemas
+COPY task/generate-compass-facts/schemas /opt/schemas
+COPY task/publish-to-compass/schemas      /opt/schemas
 
 # Behavioral eval: task suites
 COPY task/mcp-behavioral-eval/suites/default /opt/suites/mcp/default
@@ -50,6 +57,7 @@ COPY task/mcp-behavioral-eval/suites/default /opt/suites/mcp/default
 # Kubernetes Job templates for conformance and behavioral evaluation
 COPY task/mcp-conformance-eval/templates /opt/templates
 COPY task/mcp-behavioral-eval/templates  /opt/templates
+COPY task/publish-to-compass/templates   /opt/templates
 
 # /opt for scripts, /opt/agent-eval-harness for abevalflow (from base image)
 ENV PYTHONPATH=/opt:/opt/agent-eval-harness
@@ -68,6 +76,7 @@ RUN curl -fsSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
       "semgrep==${SEMGREP_VERSION}" \
       "pydantic==${PYDANTIC_VERSION}" \
       "httpx==${HTTPX_VERSION}" \
+      "jsonschema==${JSONSCHEMA_VERSION}" \
  && dnf install -y ruby ruby-devel gcc gcc-c++ make cmake pkgconf-pkg-config openssl-devel \
  && gem install licensee -v "${LICENSEE_VERSION}" \
  && dnf remove -y ruby-devel gcc gcc-c++ make cmake pkgconf-pkg-config openssl-devel \

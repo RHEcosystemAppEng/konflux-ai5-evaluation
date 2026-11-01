@@ -28,8 +28,8 @@
 #   back to the origin repository -- Trusted Artifacts are an immutable,
 #   read-only snapshot mechanism and cannot represent a push-back.
 #
-# MCP evaluation tasks (create-namespace through wait-ready):
-#   These seven Tasks form the MCP server evaluation pipeline. Their
+# MCP evaluation tasks:
+#   These Tasks form the MCP server evaluation pipeline. Their
 #   workspaces serve two purposes that do not map onto the OCI-Trusted-
 #   Artifact model:
 #   - `target-kubeconfig`: a read-only credential mount (OCP Secret) for
@@ -44,9 +44,11 @@ paths:
   - task/update-registered-shas/update-registered-shas.yaml
   - task/create-namespace/create-namespace.yaml
   - task/deploy-mcp/deploy-mcp.yaml
+  - task/generate-compass-facts/generate-compass-facts.yaml
   - task/mcp-behavioral-eval/mcp-behavioral-eval.yaml
   - task/mcp-conformance-eval/mcp-conformance-eval.yaml
   - task/mcp-static-eval/mcp-static-eval.yaml
   - task/parse-snapshot/parse-snapshot.yaml
+  - task/publish-to-compass/publish-to-compass.yaml
   - task/teardown-namespace/teardown-namespace.yaml
   - task/wait-ready/wait-ready.yaml

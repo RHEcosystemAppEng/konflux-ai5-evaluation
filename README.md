@@ -27,12 +27,14 @@ to.
 | [mcp-static-eval](task/mcp-static-eval/README.md) | Static checks (secrets, code execution, license) against MCP server source. | 0.1.0 |
 | [mcp-conformance-eval](task/mcp-conformance-eval/README.md) | Deterministic conformance probes against a deployed MCP server (no LLM). | 0.1.0 |
 | [mcp-behavioral-eval](task/mcp-behavioral-eval/README.md) | LLM-driven behavioral evaluation using mcpchecker against a deployed MCP server. | 0.1.0 |
+| [generate-compass-facts](task/generate-compass-facts/README.md) | Generates Compass SoundCheck fact payloads from MCP evaluation summaries. | 0.1.0 |
+| [publish-to-compass](task/publish-to-compass/README.md) | Publishes generated fact payloads to Compass SoundCheck. | 0.1.0 |
 | [teardown-namespace](task/teardown-namespace/README.md) | Deletes the ephemeral evaluation namespace (`finally` block). | 0.1.0 |
 
 Every task's own `README.md` documents its full Parameters/Results/
 Workspaces/**Secrets** tables and a copy-pasteable usage snippet. See
 [docs/examples/skills-evaluation-usage.md](docs/examples/skills-evaluation-usage.md)
-for how all five compose together in a real pipeline (the exact wiring
+for how the tasks compose together in a real pipeline (the exact wiring
 agentic-plugins itself uses).
 
 ## Reusability scope
@@ -53,7 +55,9 @@ agentic-plugins itself uses).
   `README.md` -- these three tasks implement a *bookkeeping pattern*, not a
   fully self-contained integration.
 
-No task in this repo uses a ConfigMap.
+`publish-to-compass` creates a temporary ConfigMap on the target cluster to
+mount generated fact files into its publishing Job. The task deletes that
+ConfigMap after the Job finishes.
 
 ## Getting bundle images
 
