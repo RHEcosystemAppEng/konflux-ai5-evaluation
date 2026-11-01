@@ -1,0 +1,381 @@
+# Merge fragment for an existing Konflux on-push PipelineRun; not a standalone resource.
+# Read ../onboarding.md before use. Append named lists; preserve existing build tasks,
+# results, workspaces, service account, metadata, and PipelineRun parameter values.
+# Replace example defaults. Existing build must expose git-url, revision,
+# clone-repository.results.SOURCE_ARTIFACT, and build-image-index IMAGE_URL/IMAGE_DIGEST.
+# Bundle/runtime pins are copied from the checked-in agentic-plugins reference.
+metadata:
+  annotations:
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "main" && !body.commits.exists(c, (c.message.contains("[skip-evaluation]") || c.message.contains("[skip-fanout]")))
+    pipelinesascode.tekton.dev/cancel-in-progress: 'false'
+spec:
+  timeouts:
+    pipeline: 24h
+    tasks: 23h
+    finally: 1h
+  pipelineSpec:
+    params:
+      - name: tiers
+        type: string
+        default: auto
+      - name: n-concurrent
+        type: string
+        default: '1'
+      - name: persist
+        type: string
+        default: postgres,s3
+      - name: persistence-required
+        type: string
+        default: 'true'
+      - name: evaluation-image
+        type: string
+        default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.5-runner@sha256:961abe053e959ac0f4d3cf849cdd86f06a27368128ca902aaabced092932d12e
+      - name: trial-image
+        type: string
+        default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-trial@sha256:374b28704de8562ae2d6130d84d8d33d99db7dfe9680315034b10db5308cc983
+      - name: llm-secret
+        type: string
+        default: plugin-evaluation-llm
+      - name: llm-api-base
+        type: string
+        default: https://llm.example.com/v1
+      - name: llm-model
+        type: string
+        default: gemini-2.5-flash
+      - name: agent-api-base
+        type: string
+        default: https://llm.example.com
+      - name: skill-review
+        type: string
+        default: 'false'
+      - name: insecure-ssl
+        type: string
+        default: 'false'
+      - name: submission-review
+        type: string
+        default: auto
+      - name: continue-on-tier1-failure
+        type: string
+        default: 'false'
+      - name: aeh-model-override
+        type: string
+        default: ''
+      - name: aeh-judge-model-override
+        type: string
+        default: ''
+      - name: aeh-kubeconfig-secret
+        type: string
+        default: plugin-evaluation-kubeconfig
+      - name: workload-namespace
+        type: string
+        default: plugin-evaluation
+      - name: workload-credentials-secret
+        type: string
+        default: plugin-evaluation-models
+      - name: workload-service-account
+        type: string
+        default: evaluation-trial
+      - name: database-secret
+        type: string
+        default: plugin-evaluation-db
+      - name: s3-secret
+        type: string
+        default: plugin-evaluation-s3
+      - name: s3-bucket
+        type: string
+        default: ab-eval-reports
+      - name: compass-secret
+        type: string
+        default: plugin-evaluation-compass
+      - name: ca-bundle-configmap
+        type: string
+        default: plugin-evaluation-ca
+      - name: otel-exporter-endpoint
+        type: string
+        default: ''
+      - name: command-timeout
+        type: string
+        default: '7200'
+      - name: timeout-retries
+        type: string
+        default: '1'
+      - name: evaluation-label
+        type: string
+        default: evaluate
+      - name: gitlab-server-url
+        type: string
+        default: https://gitlab.example.com
+      - name: gitlab-project-path
+        type: string
+        default: team%2Fplugins
+      - name: git-token-secret-name
+        type: string
+        default: plugin-evaluation-git
+      - name: git-token-secret-key
+        type: string
+        default: password
+      - name: git-ssl-no-verify
+        type: string
+        default: 'false'
+      - name: git-push-branch
+        type: string
+        default: main
+      - name: git-bot-name
+        type: string
+        default: plugin-evaluation-bot
+      - name: git-bot-email
+        type: string
+        default: plugin-evaluation-bot@example.com
+    results:
+      - name: TEST_OUTPUT_TIER_A
+        type: string
+        description: Aggregated Tier 1 evaluation result.
+        value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_A)
+      - name: TEST_OUTPUT_TIER_B
+        type: string
+        description: Aggregated informational Tier 2 result.
+        value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_B)
+      - name: TEST_OUTPUT_PUBLICATION
+        type: string
+        description: Aggregated application persistence and OCI attachment result.
+        value: $(tasks.evaluate-skill.results.TEST_OUTPUT_PUBLICATION)
+      - name: TEST_OUTPUT
+        description: Aggregated blocking Tier 1 result.
+        value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_A)
+    tasks:
+      - name: check-pr-label
+        runAfter:
+          - clone-repository
+        taskRef:
+          resolver: bundles
+          params:
+            - name: name
+              value: check-pr-label
+            - name: bundle
+              value: quay.io/ecosystem-appeng/konflux-skill-evaluation/check-pr-label:0.1.0@sha256:27196ca1f4bc04b570ff230e9ccbb174faf8beabd2240db7222c2f5cc2649eb6
+            - name: kind
+              value: task
+        params:
+          - name: current-sha
+            value: $(params.revision)
+          - name: label-name
+            value: $(params.evaluation-label)
+          - name: gitlab-server-url
+            value: $(params.gitlab-server-url)
+          - name: gitlab-project-path
+            value: $(params.gitlab-project-path)
+          - name: git-token-secret-name
+            value: $(params.git-token-secret-name)
+          - name: git-token-secret-key
+            value: $(params.git-token-secret-key)
+      - name: select-evaluation-tiers
+        runAfter:
+          - check-pr-label
+        params:
+          - name: tiers
+            value: $(params.tiers)
+          - name: should-evaluate
+            value: $(tasks.check-pr-label.results.should-evaluate)
+        taskSpec:
+          params:
+            - name: tiers
+              type: string
+            - name: should-evaluate
+              type: string
+          results:
+            - name: tiers
+              description: Explicit tiers passed to the CLI.
+            - name: should-register
+              description: true when Tier 2 was selected.
+          steps:
+            - name: select
+              image: registry.access.redhat.com/ubi9/python-311:latest
+              env:
+                - name: TIERS
+                  value: $(params.tiers)
+                - name: SHOULD_EVALUATE
+                  value: $(params.should-evaluate)
+                - name: TIERS_PATH
+                  value: $(results.tiers.path)
+                - name: REGISTER_PATH
+                  value: $(results.should-register.path)
+              script: |
+                #!/usr/bin/env python3
+                import os
+                from pathlib import Path
+
+                tiers = os.environ["TIERS"]
+                label = os.environ["SHOULD_EVALUATE"]
+                if label not in {"true", "false"}:
+                    raise SystemExit("Invalid label result")
+                if tiers == "auto":
+                    tiers = "1,2" if label == "true" else "1"
+                if tiers not in {"1", "2", "1,2"}:
+                    raise SystemExit("tiers must be auto, 1, 2, or 1,2")
+                Path(os.environ["TIERS_PATH"]).write_text(tiers)
+                Path(os.environ["REGISTER_PATH"]).write_text("true" if "2" in tiers.split(",") else "false")
+      - name: discover-changed-skills
+        runAfter:
+          - clone-repository
+        taskRef:
+          resolver: bundles
+          params:
+            - name: name
+              value: discover-changed-skills
+            - name: bundle
+              value: quay.io/ecosystem-appeng/konflux-skill-evaluation/discover-changed-skills:0.1.0@sha256:808fe417936820aedfab210a3bc3e0a0e01aaf45696b6a4d99aa7457fe92dcf0
+            - name: kind
+              value: task
+        params:
+          - name: current-sha
+            value: $(params.revision)
+          - name: git-clone-url
+            value: $(params.git-url)
+          - name: detect-script-path
+            value: scripts/detect_changed_skills.py
+          - name: git-token-secret-name
+            value: $(params.git-token-secret-name)
+          - name: git-token-secret-key
+            value: $(params.git-token-secret-key)
+          - name: git-ssl-no-verify
+            value: $(params.git-ssl-no-verify)
+        workspaces:
+          - name: source
+            workspace: evaluation-evidence
+      - name: evaluate-skill
+        runAfter:
+          - discover-changed-skills
+          - select-evaluation-tiers
+          - build-image-index
+        timeout: 22h
+        taskRef:
+          resolver: bundles
+          params:
+            - name: name
+              value: aeh-skill-eval
+            - name: bundle
+              value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:2.1.3@sha256:a1b6c84196f8f63bf8b530f25d6a3ba8167f2acbfefc4efb3de2fa31db3fb4b3
+            - name: kind
+              value: task
+        params:
+          - name: changed-skills
+            value: $(tasks.discover-changed-skills.results.changed-skills[*])
+          - name: command-timeout
+            value: $(params.command-timeout)
+          - name: timeout-retries
+            value: $(params.timeout-retries)
+          - name: submission-revision
+            value: $(params.revision)
+          - name: source-artifact
+            value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
+          - name: tiers
+            value: $(tasks.select-evaluation-tiers.results.tiers)
+          - name: n-concurrent
+            value: $(params.n-concurrent)
+          - name: persist
+            value: $(params.persist)
+          - name: persistence-required
+            value: $(params.persistence-required)
+          - name: evaluation-image
+            value: $(params.evaluation-image)
+          - name: llm-secret
+            value: $(params.llm-secret)
+          - name: llm-api-base
+            value: $(params.llm-api-base)
+          - name: llm-model
+            value: $(params.llm-model)
+          - name: agent-api-base
+            value: $(params.agent-api-base)
+          - name: insecure-ssl
+            value: $(params.insecure-ssl)
+          - name: skill-review
+            value: $(params.skill-review)
+          - name: submission-review
+            value: $(params.submission-review)
+          - name: continue-on-tier1-failure
+            value: $(params.continue-on-tier1-failure)
+          - name: aeh-model-override
+            value: $(params.aeh-model-override)
+          - name: aeh-judge-model-override
+            value: $(params.aeh-judge-model-override)
+          - name: aeh-kubeconfig-secret
+            value: $(params.aeh-kubeconfig-secret)
+          - name: workload-namespace
+            value: $(params.workload-namespace)
+          - name: workload-credentials-secret
+            value: $(params.workload-credentials-secret)
+          - name: workload-service-account
+            value: $(params.workload-service-account)
+          - name: database-secret
+            value: $(params.database-secret)
+          - name: s3-secret
+            value: $(params.s3-secret)
+          - name: s3-bucket
+            value: $(params.s3-bucket)
+          - name: compass-secret
+            value: $(params.compass-secret)
+          - name: ca-bundle-configmap
+            value: $(params.ca-bundle-configmap)
+          - name: otel-exporter-endpoint
+            value: $(params.otel-exporter-endpoint)
+          - name: aeh-image
+            value: $(params.trial-image)
+          - name: image-url
+            value: $(tasks.build-image-index.results.IMAGE_URL)
+          - name: image-digest
+            value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+        workspaces:
+          - name: source
+            workspace: evaluation-evidence
+      - name: update-registered-shas
+        runAfter:
+          - evaluate-skill
+        taskRef:
+          resolver: bundles
+          params:
+            - name: name
+              value: update-registered-shas
+            - name: bundle
+              value: quay.io/ecosystem-appeng/konflux-skill-evaluation/update-registered-shas:1.0.0@sha256:327a4a841618d1a4693805c714008434b6d0f1d919332231e58a14cf0a560c00
+            - name: kind
+              value: task
+        params:
+          - name: current-sha
+            value: $(params.revision)
+          - name: should-evaluate
+            value: $(tasks.select-evaluation-tiers.results.should-register)
+          - name: changed-skills
+            value: $(tasks.discover-changed-skills.results.changed-skills[*])
+          - name: batch-manifest
+            value: $(tasks.evaluate-skill.results.batch-manifest)
+          - name: register-script-path
+            value: scripts/register_evaluation_results.py
+          - name: git-remote-url
+            value: $(params.git-url)
+          - name: git-push-branch
+            value: $(params.git-push-branch)
+          - name: git-bot-name
+            value: $(params.git-bot-name)
+          - name: git-bot-email
+            value: $(params.git-bot-email)
+          - name: git-token-secret-name
+            value: $(params.git-token-secret-name)
+          - name: git-token-secret-key
+            value: $(params.git-token-secret-key)
+          - name: git-ssl-no-verify
+            value: $(params.git-ssl-no-verify)
+        workspaces:
+          - name: source
+            workspace: evaluation-evidence
+    workspaces:
+      - name: evaluation-evidence
+        description: Discovery clone in repo/; trusted-source batch evidence in runs/.
+  workspaces:
+    - name: evaluation-evidence
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 2Gi

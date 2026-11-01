@@ -42,7 +42,8 @@ Single-skill `abeval run`, plugin loading, scoring, reports, persistence, and
 per-tier policies remain unchanged. No PipelineRun concurrency limit is added.
 OCI now attaches one batch archive. The runner/trial images retain the same AEH
 pin. Rebuild/publish images and bundles, then update consumers to verified digests.
-See the [current example](examples/skills-evaluation-usage.md).
+See the [onboarding guide](onboarding.md) and
+[pipeline merge fragment](examples/evaluation-extension.yaml).
 
 The 1.0.0 migration below describes the previous release and its old interface.
 
@@ -69,7 +70,7 @@ together. No image tags or digests in this document imply a published release.
 | Aggregator source artifact and script parameters | Removed; aggregation is inline Python with no application image. |
 
 Expose `tiers` and `persist` in the Pipeline and forward them to the Task as in
-[the example](examples/skills-evaluation-usage.md). A direct TaskRun can set them
+[the onboarding guide](onboarding.md). A direct TaskRun can set them
 without a Pipeline. Defaults are Tier 1 and no application persistence.
 Only one task step runs evaluation, through `abeval run`. Trusted source
 retrieval, evidence packaging, OCI attachment, and inline result projection remain separate.

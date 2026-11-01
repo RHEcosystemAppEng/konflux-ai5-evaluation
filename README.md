@@ -11,6 +11,11 @@ from [konflux-ci/task-repo-shared-ci](https://github.com/konflux-ci/task-repo-sh
 see [SHARED-CI.md](SHARED-CI.md) for the full standard this repo is onboarded
 to.
 
+To adopt evaluation in another plugin repository, start with the
+[Konflux onboarding guide](docs/onboarding.md). It covers the path from a generated
+build pipeline through Secrets, workload access, bundle wiring, and evaluation
+after merging an MR labeled `evaluate`, with a companion pipeline merge fragment.
+
 ## Task catalog
 
 | Task | Purpose | Version |
@@ -23,8 +28,9 @@ to.
 
 Every task's own `README.md` documents its full Parameters/Results/
 Workspaces/**Secrets** tables and a copy-pasteable usage snippet. See
-[docs/examples/skills-evaluation-usage.md](docs/examples/skills-evaluation-usage.md)
-for pipeline wiring and the CLI migration. Sequential pipelines no longer use the legacy aggregator.
+[the onboarding guide](docs/onboarding.md) for pipeline wiring and
+[the CLI migration guide](docs/migration-cli.md) for upgrades. Sequential pipelines
+no longer use the legacy aggregator.
 
 ## Reusability scope
 
