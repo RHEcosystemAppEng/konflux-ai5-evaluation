@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
 from pathlib import Path
 
 import jsonschema
 
+from scripts.models import McpCheckResult, McpPhaseResult
 from scripts.phase_map import DEFAULT_SOURCE, PHASES, VALID_CHECK_STATUSES
-from scripts.models.check import McpCheckResult
-from scripts.models.evaluation import McpEvalResult
-from scripts.models.phase import McpPhaseResult
-from scripts.validation.schema import get_summary_schema
+from scripts.validation import get_summary_schema
 
 
 def load_phase_summary(path: Path, *, validate: bool = True) -> McpPhaseResult:
@@ -80,14 +77,4 @@ def load_phase_summary(path: Path, *, validate: bool = True) -> McpPhaseResult:
             )
         )
 
-    return McpPhaseResult(phase=phase_name, passed=data["passed"], checks=checks)
-
-
-def build_mcp_eval_result(phases: Iterable[McpPhaseResult]) -> McpEvalResult:
-    """Assemble any nonempty set of unique phase results."""
-    phase_map: dict[str, McpPhaseResult] = {}
-    for phase in phases:
-        if phase.phase in phase_map:
-            raise ValueError(f"Duplicate phase result: {phase.phase!r}")
-        phase_map[phase.phase] = phase
-    return McpEvalResult(phases=phase_map)
+    return McpPhaseResult(phase=phase_name, checks=checks)

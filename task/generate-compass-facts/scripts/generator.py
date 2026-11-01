@@ -1,4 +1,4 @@
-"""Write fact data files to disk."""
+"""Generate fact data files from phase results."""
 
 from __future__ import annotations
 
@@ -9,20 +9,34 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.phase_map import (
-    MCP_EVAL_FACT,
-    PHASE_CONSUMED_CHECKS,
-    PHASE_FACT_MAPS,
-    PHASE_FACTS,
-)
-from scripts.generator.fact_builders import (
-    build_check_fact_data,
-    build_eval_fact_data,
-    build_phase_fact_data,
-)
-from scripts.models.evaluation import McpEvalResult
+from scripts.models import McpCheckResult, McpPhaseResult
+from scripts.phase_map import PHASE_CONSUMED_CHECKS, PHASE_FACT_MAPS
 
 logger = logging.getLogger(__name__)
+
+
+def build_check_fact_data(
+    check: McpCheckResult,
+    fact_ref: str,
+    evaluated_at: datetime,
+) -> dict[str, Any]:
+    """Build fact data for a single check result."""
+    return {
+        "facts": [
+            {
+                "factRef": fact_ref,
+                "entityRef": "",
+                "data": {
+                    "passed": check.passed,
+                    "score": check.score,
+                    "status": check.status,
+                    "message": check.message,
+                    "source": check.source,
+                    "evaluated_at": evaluated_at.isoformat(),
+                },
+            }
+        ]
+    }
 
 
 def _sanitize_fact_ref(fact_ref: str) -> str:
@@ -38,15 +52,14 @@ def _write_fact_file(fact_data: dict[str, Any], fact_ref: str, output_dir: Path)
 
 
 def generate_mcp_eval_fact_files(
-    eval_result: McpEvalResult,
+    phase_results: list[McpPhaseResult],
     output_dir: Path,
 ) -> list[Path]:
-    """Generate fact data files without publishing.
+    """Generate check-level fact data files without publishing.
 
     Each file contains ``{"facts": [{"factRef": "...", "entityRef": "", "data": {...}}]}``
-    — the evaluation data keyed by fact reference.  The ``entityRef`` is
-    initialized as an empty string; the publishing step populates it from
-    the Compass secret before POSTing.
+    — one fact per check result. The ``entityRef`` is initialized as an empty
+    string; the publishing step populates it from the Compass secret before POSTing.
 
     Returns the list of written file paths.
     """
@@ -54,10 +67,11 @@ def generate_mcp_eval_fact_files(
     evaluated_at = datetime.now(UTC)
     written: list[Path] = []
 
-    for phase_name, phase_result in eval_result.phases.items():
-        # Generate per-check facts
+    for phase_result in phase_results:
+        phase_name = phase_result.phase
         fact_map = PHASE_FACT_MAPS[phase_name]
         consumed_checks = PHASE_CONSUMED_CHECKS.get(phase_name, set())
+
         for check in phase_result.checks:
             if check.status == "not_evaluated":
                 logger.info("Skipping not-evaluated check %s", check.check_id)
@@ -65,17 +79,10 @@ def generate_mcp_eval_fact_files(
             if check.check_id in consumed_checks:
                 logger.debug("Skipping consumed check %s", check.check_id)
                 continue
+
             check_fact_ref = fact_map[check.check_id]
             check_fact_data = build_check_fact_data(check, check_fact_ref, evaluated_at)
             written.append(_write_fact_file(check_fact_data, check_fact_ref, output_dir))
 
-        # Generate phase summary fact
-        phase_fact_ref = PHASE_FACTS[phase_name]
-        phase_fact_data = build_phase_fact_data(phase_result, phase_fact_ref, evaluated_at)
-        written.append(_write_fact_file(phase_fact_data, phase_fact_ref, output_dir))
-
-    eval_fact_data = build_eval_fact_data(eval_result, MCP_EVAL_FACT, evaluated_at)
-    written.append(_write_fact_file(eval_fact_data, MCP_EVAL_FACT, output_dir))
-
-    logger.info("Generated %d fact file(s) in %s", len(written), output_dir)
+    logger.info("Generated %d check fact file(s) in %s", len(written), output_dir)
     return written

@@ -51,7 +51,7 @@ mode.
     - name: name
       value: publish-to-compass
     - name: bundle
-      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/publish-to-compass:0.1.0
+      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/publish-to-compass:0.1.0@sha256:82862579230447a5619286f8f3bb393407f8bc40cd1d4564751aca4946bf7eb8
     - name: kind
       value: task
   params:

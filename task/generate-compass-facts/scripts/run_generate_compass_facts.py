@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Generate Compass SoundCheck fact data files from phase summary files.
+"""Generate Compass SoundCheck check-level fact data files from phase summaries.
 
-Reads all JSON files from a summary directory, validates each against
-the phase summary schema, and writes fact data files (factRef + data,
-no entityRef) to an output directory.  No Compass interaction — this
-is a pure transformation step.  The publishing task injects entityRef
-from the Compass secret before POSTing.
+Reads all JSON files from a summary directory, validates each against the phase
+summary schema, and writes check-level fact data files (factRef + data, no
+entityRef) to an output directory. Only individual check facts are generated
+(no phase or evaluation summaries). No Compass interaction — this is a pure
+transformation step. The publishing task injects entityRef from the Compass
+secret before POSTing.
 
 Usage:
     python -m scripts.run_generate_compass_facts \
@@ -13,15 +14,13 @@ Usage:
         --output-dir facts
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import sys
 from pathlib import Path
 
 from scripts.generator import generate_mcp_eval_fact_files
-from scripts.load_summary import build_mcp_eval_result, load_phase_summary
+from scripts.load_summary import load_phase_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -65,6 +64,10 @@ def main() -> int:
             logger.warning("Skipping %s: duplicate phase %r", path.name, phase_result.phase)
             continue
 
+        if phase_result.checks_total == 0:
+            logger.warning("Skipping %s: phase %r has no checks", path.name, phase_result.phase)
+            continue
+
         seen.add(phase_result.phase)
         phases.append(phase_result)
         logger.info("Loaded phase %r from %s (%d checks)", phase_result.phase, path.name, phase_result.checks_total)
@@ -73,8 +76,7 @@ def main() -> int:
         logger.error("No valid phase summaries found")
         return 1
 
-    eval_result = build_mcp_eval_result(phases)
-    written = generate_mcp_eval_fact_files(eval_result, args.output_dir)
+    written = generate_mcp_eval_fact_files(phases, args.output_dir)
     logger.info("Generated %d fact file(s) in %s", len(written), args.output_dir)
     return 0
 

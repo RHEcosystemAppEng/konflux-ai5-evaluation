@@ -9,8 +9,8 @@
 ### Added
 
 - Initial version.
-- Generates validated Compass SoundCheck fact payload files from MCP
-  evaluation phase summaries.
-- Produces individual check facts, phase summaries, and an overall MCP
-  evaluation summary.
-- Owns only phase-summary validation and fact-generation runtime assets.
+- Generates validated Compass SoundCheck check-level fact payload files from
+  MCP evaluation phase summaries.
+- Validates phase summary JSON files against the schema.
+- Fact format includes `factRef`, `entityRef` (empty), and check data. The
+  `entityRef` is populated by the publishing step.

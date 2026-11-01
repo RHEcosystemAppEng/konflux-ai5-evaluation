@@ -12,7 +12,6 @@ from __future__ import annotations
 
 PHASES: dict[str, dict] = {
     "static-eval": {
-        "fact_ref": "abevalflow:default/mcp_static_eval",
         "source": "pipeline",
         "checks": {
             "mcp-secrets": {
@@ -30,7 +29,6 @@ PHASES: dict[str, dict] = {
         },
     },
     "conformance-eval": {
-        "fact_ref": "abevalflow:default/mcp_conformance_eval",
         "source": "probe",
         "checks": {
             "http-support": {
@@ -80,7 +78,6 @@ PHASES: dict[str, dict] = {
         },
     },
     "behavioral-eval": {
-        "fact_ref": "abevalflow:default/mcp_behavioral_eval",
         "source": "pipeline",
         "checks": {
             "tool-correctness": {
@@ -99,9 +96,6 @@ PHASES: dict[str, dict] = {
     },
 }
 
-# Top-level fact for overall MCP evaluation
-MCP_EVAL_FACT = "abevalflow:default/mcp_eval"
-
 # Source validation and defaults
 DEFAULT_SOURCE = "pipeline"
 VALID_CHECK_STATUSES = frozenset({"pass", "fail", "not_evaluated"})
@@ -110,21 +104,10 @@ VALID_CHECK_STATUSES = frozenset({"pass", "fail", "not_evaluated"})
 # Derived Lookups - Computed from PHASES
 # ============================================================================
 
-# Check names by phase
-PHASE_CHECK_NAMES: dict[str, dict[str, str]] = {
-    phase: {check_id: check_data["name"] for check_id, check_data in phase_data["checks"].items()}
-    for phase, phase_data in PHASES.items()
-}
-
 # Fact mappings by phase
 PHASE_FACT_MAPS: dict[str, dict[str, str]] = {
     phase: {check_id: check_data["fact_ref"] for check_id, check_data in phase_data["checks"].items()}
     for phase, phase_data in PHASES.items()
-}
-
-# Phase fact refs
-PHASE_FACTS: dict[str, str] = {
-    phase: phase_data["fact_ref"] for phase, phase_data in PHASES.items()
 }
 
 # Consumed checks by phase (checks marked as consumed=True)
@@ -134,20 +117,4 @@ PHASE_CONSUMED_CHECKS: dict[str, set[str]] = {
     }
     for phase, phase_data in PHASES.items()
     if any(check_data.get("consumed", False) for check_data in phase_data["checks"].values())
-}
-
-# Source defaults by phase
-PHASE_SOURCE_DEFAULTS: dict[str, str] = {
-    phase: phase_data["source"] for phase, phase_data in PHASES.items()
-}
-
-# Per-check source overrides by phase
-PHASE_CHECK_SOURCE_DEFAULTS: dict[str, dict[str, str]] = {
-    phase: {
-        check_id: check_data["source"]
-        for check_id, check_data in phase_data["checks"].items()
-        if "source" in check_data
-    }
-    for phase, phase_data in PHASES.items()
-    if any("source" in check_data for check_data in phase_data["checks"].values())
 }

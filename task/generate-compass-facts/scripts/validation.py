@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-_SCHEMAS_DIR = Path(__file__).resolve().parent.parent.parent / "schemas"
+_SCHEMAS_DIR = Path(__file__).resolve().parent.parent / "schemas"
 
 _SUMMARY_SCHEMA: dict | None = None
 

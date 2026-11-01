@@ -10,10 +10,11 @@ spec:
   description: >-
     Generate Compass SoundCheck fact payloads from evaluation phase
     summaries. Validates each JSON file in the summary directory
-    against the phase summary schema and writes fact data files to the
-    workspace. The generated files contain factRef and data only —
-    entityRef is injected by the publishing step. No Compass
-    interaction.
+    against the phase summary schema and writes check-level fact data
+    files to the workspace. Only individual check facts are generated
+    (no phase or evaluation summaries). The generated files contain
+    factRef and data only — entityRef is injected by the publishing
+    step. No Compass interaction.
   params:
     - name: mcp-eval-image
       type: string
@@ -49,7 +50,7 @@ spec:
         FACTS_DIR="$(workspaces.source.path)/$FACTS_DIR"
 
         echo "=== Generating fact payloads ==="
-        python -m scripts.mcp.runners.generate_compass_facts \
+        python -m scripts.run_generate_compass_facts \
           --summary-dir "$SUMMARY_DIR" \
           --output-dir "$FACTS_DIR"
 

@@ -1,10 +1,13 @@
 # generate-compass-facts task
 
-Generates Compass SoundCheck fact payload files from the static,
+Generates Compass SoundCheck check-level fact payload files from the static,
 conformance, and optional behavioral MCP evaluation phase summaries in a
-shared workspace. Its runtime assets contain only summary interpretation and
-fact generation code plus the phase-summary schema. This task does not contact
-Compass.
+shared workspace. Each fact file contains data for a single check result.
+Phase-level and evaluation-level facts are not generated.
+
+The task validates phase summary JSON files against the schema and produces
+fact files with `factRef` and check data. The `entityRef` field is left empty
+and populated by the publishing step. This task does not contact Compass.
 
 ## Parameters
 
@@ -41,7 +44,7 @@ This task does not read Secrets.
     - name: name
       value: generate-compass-facts
     - name: bundle
-      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/generate-compass-facts:0.1.0
+      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/generate-compass-facts:0.1.0@sha256:dde06ba723b8e4ad156ef4fd1ecbe8d1370d241f6464c96c66bbc4c93f41158c
     - name: kind
       value: task
   workspaces:
