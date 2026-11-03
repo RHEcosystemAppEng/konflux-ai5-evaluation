@@ -21,10 +21,10 @@ spec:
         pipeline code (scripts, abevalflow.mcp) baked in at PYTHONPATH=/opt.
     - name: source-subdir
       type: string
-      default: "."
+      default: "mcp-server-repo"
       description: >-
-        Path of the MCP server source within the workspace to scan
-        (relative to the workspace root). Defaults to the workspace root.
+        Subdirectory within the workspace where the MCP server repository
+        is cloned (relative to the workspace root).
     - name: mode
       type: string
       default: "block"
