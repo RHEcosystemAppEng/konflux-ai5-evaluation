@@ -57,12 +57,12 @@ def main() -> int:
         try:
             phase_result = load_phase_summary(path)
         except Exception as exc:
-            logger.warning("Skipping %s: %s", path.name, exc)
-            continue
+            logger.error("Failed to load %s: %s", path.name, exc)
+            return 1
 
         if phase_result.phase in seen:
-            logger.warning("Skipping %s: duplicate phase %r", path.name, phase_result.phase)
-            continue
+            logger.error("Duplicate phase %r in %s", phase_result.phase, path.name)
+            return 1
 
         if phase_result.checks_total == 0:
             logger.warning("Skipping %s: phase %r has no checks", path.name, phase_result.phase)
@@ -76,8 +76,7 @@ def main() -> int:
         logger.error("No valid phase summaries found")
         return 1
 
-    written = generate_mcp_eval_fact_files(phases, args.output_dir)
-    logger.info("Generated %d fact file(s) in %s", len(written), args.output_dir)
+    generate_mcp_eval_fact_files(phases, args.output_dir)
     return 0
 
 

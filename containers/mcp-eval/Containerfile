@@ -24,7 +24,7 @@
 FROM quay.io/ecosystem-appeng/mcpchecker-runner:latest AS mcpchecker-runner
 
 # ── Stage 2: Runtime image (agent-eval-harness provides abevalflow + Node.js + pyyaml) ──
-FROM quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
+FROM quay.io/ecosystem-appeng/agent-eval-harness:v1.2.8
 
 ARG HELM_VERSION=3.16.3
 ARG GITLEAKS_VERSION=8.30.0

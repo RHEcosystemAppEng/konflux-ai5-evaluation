@@ -54,14 +54,12 @@ def _write_fact_file(fact_data: dict[str, Any], fact_ref: str, output_dir: Path)
 def generate_mcp_eval_fact_files(
     phase_results: list[McpPhaseResult],
     output_dir: Path,
-) -> list[Path]:
+) -> None:
     """Generate check-level fact data files without publishing.
 
     Each file contains ``{"facts": [{"factRef": "...", "entityRef": "", "data": {...}}]}``
     — one fact per check result. The ``entityRef`` is initialized as an empty
     string; the publishing step populates it from the Compass secret before POSTing.
-
-    Returns the list of written file paths.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     evaluated_at = datetime.now(UTC)
@@ -85,4 +83,4 @@ def generate_mcp_eval_fact_files(
             written.append(_write_fact_file(check_fact_data, check_fact_ref, output_dir))
 
     logger.info("Generated %d check fact file(s) in %s", len(written), output_dir)
-    return written
+    return
