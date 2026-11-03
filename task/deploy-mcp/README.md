@@ -13,7 +13,7 @@ ephemeral namespace before deployment.
 |---|---|---|---|
 | namespace-name | Ephemeral namespace to deploy into | | true |
 | component-image | Built container image from Konflux Snapshot | | true |
-| mcp-eval-image | MCP eval image with Helm and pipeline tooling | `quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1` | false |
+| mcp-eval-image | MCP eval image with Helm and pipeline tooling | `quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1` | false |
 | repo-subdir | Subdirectory in workspace for the cloned MCP server repo | `mcp-server-repo` | false |
 | service-name | K8s Service name for the deployed MCP server | `mcp-server` | false |
 | service-port | Port the MCP server listens on | `8080` | false |

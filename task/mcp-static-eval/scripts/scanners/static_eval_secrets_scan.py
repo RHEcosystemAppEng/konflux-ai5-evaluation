@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 from abevalflow.mcp.helpers import make_finding
-from scripts.scanners.helpers import run_tool, write_scan
+from .helpers import run_tool, write_scan
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

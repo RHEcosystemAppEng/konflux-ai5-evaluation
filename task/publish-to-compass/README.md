@@ -11,7 +11,7 @@ mode.
 
 | name | description | default value | required |
 |---|---|---|---|
-| mcp-eval-image | Image containing the publisher code and Job template | `quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1` | false |
+| mcp-eval-image | Image containing the publisher code and Job template | `quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1` | false |
 | facts-dir | Workspace-relative directory containing fact payload JSON files | `facts` | false |
 | namespace-name | Ephemeral namespace on the target cluster | | true |
 | compass-secret | Secret containing `api-key`, `compass-url`, and `entity-ref` | `mcp-eval-compass` | false |

@@ -19,8 +19,8 @@ import logging
 import sys
 from pathlib import Path
 
-from scripts.generator import generate_mcp_eval_fact_files
-from scripts.load_summary import load_phase_summary
+from .generator import generate_mcp_eval_fact_files
+from .load_summary import load_phase_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

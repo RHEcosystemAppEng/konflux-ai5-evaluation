@@ -18,7 +18,7 @@ spec:
   params:
     - name: mcp-eval-image
       type: string
-      default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
+      default: "quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1"
       description: >-
         MCP eval image with the probe dependencies (httpx, pydantic, pyyaml) and
         the pipeline code (scripts, abevalflow.mcp) baked in at PYTHONPATH=/opt.
@@ -76,8 +76,10 @@ spec:
         report not_evaluated.
     - name: job-template
       type: string
-      default: "/opt/templates/mcp-conformance-eval-job.yaml"
-      description: Path to the Kubernetes Job template for the conformance probe
+      default: "templates/mcp-conformance-eval-job.yaml"
+      description: >-
+        Relative path to the Kubernetes Job template (from task directory).
+        Override with an absolute path if needed.
   workspaces:
     - name: source
       description: Workspace for the reports directory.
@@ -96,6 +98,8 @@ spec:
       image: $(params.mcp-eval-image)
       imagePullPolicy: Always
       env:
+        - name: TASK_NAME
+          value: $(context.task.name)
         - name: NAMESPACE
           value: $(params.namespace-name)
         - name: JOB_NAME
@@ -118,10 +122,13 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
+        # Derive Python module name from task name
+        TASK_MODULE="${TASK_NAME//-/_}"
+
         # shellcheck disable=SC2016  # envsubst variable spec is intentionally single-quoted
         envsubst \
           '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${SERVER_URL} ${TIMEOUT} ${OPENAPI_URL} ${COMPASS_SECRET}' \
-          < "$JOB_TEMPLATE" \
+          < "/opt/${TASK_MODULE}/${JOB_TEMPLATE}" \
           > "$(workspaces.source.path)/conformance-eval-job.yaml"
 
         echo "Generated Job manifest:"
@@ -220,17 +227,23 @@ spec:
       image: $(params.mcp-eval-image)
       imagePullPolicy: Always
       env:
+        - name: TASK_NAME
+          value: $(context.task.name)
         - name: MODE
           value: $(params.mode)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+
+        # Derive Python module name from task name
+        TASK_MODULE="${TASK_NAME//-/_}"
+
         RESULTS_DIR="$(workspaces.source.path)/results"
         REPORTS_DIR="$(workspaces.source.path)/reports"
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
-        bash /opt/scripts/gate_wrapper.sh \
-          scripts.runners.conformance_eval_gate \
+        bash "/opt/${TASK_MODULE}/scripts/gate_wrapper.sh" \
+          "${TASK_MODULE}.scripts.runners.conformance_eval_gate" \
           "$RESULTS_DIR" \
           "$REPORTS_DIR" \
           "$MODE" \

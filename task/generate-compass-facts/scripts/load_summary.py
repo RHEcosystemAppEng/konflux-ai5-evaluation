@@ -7,9 +7,9 @@ from pathlib import Path
 
 import jsonschema
 
-from scripts.models import McpCheckResult, McpPhaseResult
-from scripts.phase_map import DEFAULT_SOURCE, PHASES, VALID_CHECK_STATUSES
-from scripts.validation import get_summary_schema
+from .models import McpCheckResult, McpPhaseResult
+from .phase_map import DEFAULT_SOURCE, PHASES, VALID_CHECK_STATUSES
+from .validation import get_summary_schema
 
 
 def load_phase_summary(path: Path, *, validate: bool = True) -> McpPhaseResult:

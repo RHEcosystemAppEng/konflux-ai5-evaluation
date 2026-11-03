@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.models import McpCheckResult, McpPhaseResult
-from scripts.phase_map import PHASE_CONSUMED_CHECKS, PHASE_FACT_MAPS
+from .models import McpCheckResult, McpPhaseResult
+from .phase_map import PHASE_CONSUMED_CHECKS, PHASE_FACT_MAPS
 
 logger = logging.getLogger(__name__)
 

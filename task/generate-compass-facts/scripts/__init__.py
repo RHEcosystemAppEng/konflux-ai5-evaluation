@@ -13,10 +13,10 @@ module. The publishing Job injects entityRef from the Compass secret
 before POSTing.
 """
 
-from scripts.generator import generate_mcp_eval_fact_files
-from scripts.load_summary import load_phase_summary
-from scripts.models import McpCheckResult, McpPhaseResult
-from scripts.phase_map import PHASE_CONSUMED_CHECKS, PHASE_FACT_MAPS, PHASES
+from .generator import generate_mcp_eval_fact_files
+from .load_summary import load_phase_summary
+from .models import McpCheckResult, McpPhaseResult
+from .phase_map import PHASE_CONSUMED_CHECKS, PHASE_FACT_MAPS, PHASES
 
 __all__ = [
     # Models

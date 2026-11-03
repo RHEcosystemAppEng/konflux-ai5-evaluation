@@ -13,7 +13,7 @@ and populated by the publishing step. This task does not contact Compass.
 
 | name | description | default value | required |
 |---|---|---|---|
-| mcp-eval-image | MCP evaluation image containing the fact generator and schemas | `quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1` | false |
+| mcp-eval-image | MCP evaluation image containing the fact generator and schemas | `quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1` | false |
 | summary-dir | Workspace-relative directory containing phase summary JSON files | `reports` | false |
 | facts-dir | Workspace-relative output directory for generated fact JSON files | `facts` | false |
 

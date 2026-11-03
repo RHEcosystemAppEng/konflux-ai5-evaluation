@@ -17,7 +17,7 @@ spec:
   params:
     - name: mcp-eval-image
       type: string
-      default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
+      default: "quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1"
       description: Image for the publish Job container.
     - name: facts-dir
       type: string
@@ -53,8 +53,10 @@ spec:
       description: Timeout in seconds for the publish Job.
     - name: job-template
       type: string
-      default: "/opt/templates/mcp-compass-publish-job.yaml"
-      description: Path to the Kubernetes Job template.
+      default: "templates/mcp-compass-publish-job.yaml"
+      description: >-
+        Relative path to the Kubernetes Job template (from task directory).
+        Override with an absolute path if needed.
   workspaces:
     - name: source
       description: Workspace containing the facts directory.
@@ -100,6 +102,8 @@ spec:
       image: $(params.mcp-eval-image)
       imagePullPolicy: Always
       env:
+        - name: TASK_NAME
+          value: $(context.task.name)
         - name: NAMESPACE
           value: $(params.namespace-name)
         - name: JOB_NAME
@@ -122,6 +126,9 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
+        # Derive Python module name from task name
+        TASK_MODULE="${TASK_NAME//-/_}"
+
         FACTS_DIR="$(workspaces.source.path)/$FACTS_DIR"
 
         if [ ! -d "$FACTS_DIR" ] || [ -z "$(ls "$FACTS_DIR"/*.json 2>/dev/null)" ]; then
@@ -133,7 +140,7 @@ spec:
         # Generate Job manifest from template
         envsubst \
           '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${CONFIGMAP_NAME} ${COMPASS_SECRET} ${DRY_RUN}' \
-          < "$JOB_TEMPLATE" \
+          < "/opt/${TASK_MODULE}/${JOB_TEMPLATE}" \
           > "$(workspaces.source.path)/compass-publish-job.yaml"
 
         echo "Generated Job manifest:"

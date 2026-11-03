@@ -15,7 +15,7 @@ spec:
   params:
     - name: mcp-eval-image
       type: string
-      default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
+      default: "quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1"
       description: >-
         MCP eval image with the scanners (gitleaks, semgrep, licensee) and the
         pipeline code (scripts, abevalflow.mcp) baked in at PYTHONPATH=/opt.
@@ -51,6 +51,8 @@ spec:
       # literal strings) instead of inlined into the script, so a value containing
       # shell metacharacters cannot execute in the task pod.
       env:
+        - name: TASK_NAME
+          value: $(context.task.name)
         - name: SOURCE_SUBDIR
           value: $(params.source-subdir)
         - name: ALLOWED_LICENSES
@@ -58,6 +60,11 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+
+        # Derive Python module name from task name
+        # mcp-static-eval (Tekton) → mcp_static_eval (Python package)
+        TASK_MODULE="${TASK_NAME//-/_}"
+
         SOURCE_DIR="$(workspaces.source.path)/$SOURCE_SUBDIR"
         RESULTS_DIR="$(workspaces.source.path)/results"
         mkdir -p "$RESULTS_DIR"
@@ -80,28 +87,34 @@ spec:
         done
 
         echo "=== Static evaluation scanners on $SOURCE_DIR ==="
-        python -m scripts.scanners.static_eval_secrets_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
-        python -m scripts.scanners.static_eval_no_user_code_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
+        python -m "${TASK_MODULE}.scripts.scanners.static_eval_secrets_scan" "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
+        python -m "${TASK_MODULE}.scripts.scanners.static_eval_no_user_code_scan" "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
         # shellcheck disable=SC2086
-        python -m scripts.scanners.static_eval_license_scan "$SOURCE_DIR" --reports-dir "$RESULTS_DIR" $LICENSE_ARGS
+        python -m "${TASK_MODULE}.scripts.scanners.static_eval_license_scan" "$SOURCE_DIR" --reports-dir "$RESULTS_DIR" $LICENSE_ARGS
 
     - name: gate
       image: $(params.mcp-eval-image)
       imagePullPolicy: Always
       env:
+        - name: TASK_NAME
+          value: $(context.task.name)
         - name: MODE
           value: $(params.mode)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+
+        # Derive Python module name from task name
+        TASK_MODULE="${TASK_NAME//-/_}"
+
         RESULTS_DIR="$(workspaces.source.path)/results"
         REPORTS_DIR="$(workspaces.source.path)/reports"
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
-        # Shared gate wrapper (baked in the image): runs the gate module, emits the
-        # Tekton results from the summary, and propagates the gate's exit code.
-        bash /opt/scripts/gate_wrapper.sh \
-          scripts.runners.static_eval_gate \
+        # Gate wrapper script: runs the gate module, emits Tekton results from
+        # the summary, and propagates the gate's exit code.
+        bash "/opt/${TASK_MODULE}/scripts/gate_wrapper.sh" \
+          "${TASK_MODULE}.scripts.runners.static_eval_gate" \
           "$RESULTS_DIR" \
           "$REPORTS_DIR" \
           "$MODE" \

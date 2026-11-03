@@ -4,7 +4,7 @@ import re
 
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-from scripts.phase_map import DEFAULT_SOURCE
+from .phase_map import DEFAULT_SOURCE
 
 PHASE_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 

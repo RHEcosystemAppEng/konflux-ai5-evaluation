@@ -16,7 +16,7 @@ configurable task suites.
 | llm-agent-secret | Secret name for LLM agent credentials | `mcp-eval-llm-agent` | false |
 | llm-judge-secret | Secret name for judge LLM model | `mcp-eval-llm-judge` | false |
 | llm-ca-secret | Secret name for CA cert bundle for internal LLM endpoints | `mcp-eval-llm-ca` | false |
-| mcp-eval-image | MCP eval image with mcpchecker and pipeline code | `quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1` | false |
+| mcp-eval-image | MCP eval image with mcpchecker and pipeline code | `quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1` | false |
 | job-template | Path to Job template inside the image | `/opt/templates/mcp-behavioral-eval-job.yaml` | false |
 | secrets-namespace | Namespace on the target cluster where LLM secrets are stored | `default` | false |
 | pipeline-run-id | Pipeline run ID for provenance | | true |

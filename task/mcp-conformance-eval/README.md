@@ -9,7 +9,7 @@ probes as a Kubernetes Job on the target cluster.
 
 | name | description | default value | required |
 |---|---|---|---|
-| mcp-eval-image | MCP eval image with probe dependencies | `quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1` | false |
+| mcp-eval-image | MCP eval image with probe dependencies | `quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1` | false |
 | namespace-name | Ephemeral namespace where MCP server is deployed | | true |
 | service-name | K8s Service name of deployed MCP server | `mcp-server` | false |
 | service-port | Port MCP server listens on | `8080` | false |

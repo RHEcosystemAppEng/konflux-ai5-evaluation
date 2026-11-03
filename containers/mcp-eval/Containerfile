@@ -17,14 +17,14 @@
 #   - MCP eval and Compass fact scripts, schemas, job templates, and suites
 #
 # Build from repo root (COPY needs repo-root context):
-#   podman build -t quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1 \
+#   podman build -t quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1 \
 #     -f containers/mcp-eval/Containerfile .
 
 # ── Stage 1: mcpchecker-runner (source for mcpchecker binary) ──
 FROM quay.io/ecosystem-appeng/mcpchecker-runner:latest AS mcpchecker-runner
 
 # ── Stage 2: Runtime image (agent-eval-harness provides abevalflow + Node.js + pyyaml) ──
-FROM quay.io/ecosystem-appeng/agent-eval-harness:latest
+FROM quay.io/ecosystem-appeng/agent-eval-harness:v1.2.7
 
 ARG HELM_VERSION=3.16.3
 ARG GITLEAKS_VERSION=8.30.0
@@ -32,7 +32,6 @@ ARG SEMGREP_VERSION=1.179.0
 ARG LICENSEE_VERSION=9.18.0
 ARG PYDANTIC_VERSION=2.13.5
 ARG HTTPX_VERSION=0.28.1
-ARG JSONSCHEMA_VERSION=4.23.0
 
 USER 0
 
@@ -40,26 +39,38 @@ USER 0
 COPY --from=mcpchecker-runner /usr/local/bin/mcpchecker /usr/local/bin/mcpchecker
 RUN chmod +x /usr/local/bin/mcpchecker
 
-# MCP eval scripts — Tekton step entry points
-COPY task/mcp-static-eval/scripts      /opt/scripts
-COPY task/mcp-conformance-eval/scripts /opt/scripts
-COPY task/mcp-behavioral-eval/scripts  /opt/scripts
-COPY task/generate-compass-facts/scripts /opt/scripts
-COPY task/publish-to-compass/scripts     /opt/scripts
+# MCP eval tasks — organized by task name as Python packages
+# Directory names use underscores (Python requirement), Tekton task metadata.name uses hyphens.
+# Tasks derive their directory via: TASK_MODULE="${TASK_NAME//-/_}" where TASK_NAME=$(context.task.name)
+# This allows zero hardcoding while maintaining proper Python package structure.
 
-# Task-owned schemas
-COPY task/generate-compass-facts/schemas /opt/schemas
-COPY task/publish-to-compass/schemas      /opt/schemas
+# mcp-static-eval → mcp_static_eval
+COPY task/mcp-static-eval/__init__.py /opt/mcp_static_eval/__init__.py
+COPY task/mcp-static-eval/scripts     /opt/mcp_static_eval/scripts
 
-# Behavioral eval: task suites
-COPY task/mcp-behavioral-eval/suites/default /opt/suites/mcp/default
+# mcp-conformance-eval → mcp_conformance_eval
+COPY task/mcp-conformance-eval/__init__.py /opt/mcp_conformance_eval/__init__.py
+COPY task/mcp-conformance-eval/scripts     /opt/mcp_conformance_eval/scripts
+COPY task/mcp-conformance-eval/templates   /opt/mcp_conformance_eval/templates
 
-# Kubernetes Job templates for conformance and behavioral evaluation
-COPY task/mcp-conformance-eval/templates /opt/templates
-COPY task/mcp-behavioral-eval/templates  /opt/templates
-COPY task/publish-to-compass/templates   /opt/templates
+# mcp-behavioral-eval → mcp_behavioral_eval
+COPY task/mcp-behavioral-eval/__init__.py /opt/mcp_behavioral_eval/__init__.py
+COPY task/mcp-behavioral-eval/scripts     /opt/mcp_behavioral_eval/scripts
+COPY task/mcp-behavioral-eval/suites      /opt/mcp_behavioral_eval/suites
+COPY task/mcp-behavioral-eval/templates   /opt/mcp_behavioral_eval/templates
 
-# /opt for scripts, /opt/agent-eval-harness for abevalflow (from base image)
+# generate-compass-facts → generate_compass_facts
+COPY task/generate-compass-facts/__init__.py /opt/generate_compass_facts/__init__.py
+COPY task/generate-compass-facts/scripts     /opt/generate_compass_facts/scripts
+COPY task/generate-compass-facts/schemas     /opt/generate_compass_facts/schemas
+
+# publish-to-compass → publish_to_compass
+COPY task/publish-to-compass/__init__.py /opt/publish_to_compass/__init__.py
+COPY task/publish-to-compass/scripts     /opt/publish_to_compass/scripts
+COPY task/publish-to-compass/schemas     /opt/publish_to_compass/schemas
+COPY task/publish-to-compass/templates   /opt/publish_to_compass/templates
+
+# /opt for task packages, /opt/agent-eval-harness for abevalflow (from base image)
 ENV PYTHONPATH=/opt:/opt/agent-eval-harness
 
 # Scanning tools and extra Python deps not in the base image.
@@ -76,7 +87,6 @@ RUN curl -fsSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
       "semgrep==${SEMGREP_VERSION}" \
       "pydantic==${PYDANTIC_VERSION}" \
       "httpx==${HTTPX_VERSION}" \
-      "jsonschema==${JSONSCHEMA_VERSION}" \
  && dnf install -y ruby ruby-devel gcc gcc-c++ make cmake pkgconf-pkg-config openssl-devel \
  && gem install licensee -v "${LICENSEE_VERSION}" \
  && dnf remove -y ruby-devel gcc gcc-c++ make cmake pkgconf-pkg-config openssl-devel \

@@ -18,7 +18,7 @@ spec:
   params:
     - name: mcp-eval-image
       type: string
-      default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
+      default: "quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1"
     - name: summary-dir
       type: string
       default: "reports"
@@ -38,6 +38,8 @@ spec:
       image: $(params.mcp-eval-image)
       imagePullPolicy: Always
       env:
+        - name: TASK_NAME
+          value: $(context.task.name)
         - name: SUMMARY_DIR
           value: $(params.summary-dir)
         - name: FACTS_DIR
@@ -46,11 +48,14 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
+        # Derive Python module name from task name
+        TASK_MODULE="${TASK_NAME//-/_}"
+
         SUMMARY_DIR="$(workspaces.source.path)/$SUMMARY_DIR"
         FACTS_DIR="$(workspaces.source.path)/$FACTS_DIR"
 
         echo "=== Generating fact payloads ==="
-        python -m scripts.run_generate_compass_facts \
+        python -m "${TASK_MODULE}.scripts.run_generate_compass_facts" \
           --summary-dir "$SUMMARY_DIR" \
           --output-dir "$FACTS_DIR"
 

@@ -23,7 +23,7 @@ spec:
       description: Built container image reference from the Snapshot
     - name: mcp-eval-image
       type: string
-      default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
+      default: "quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1"
       description: >-
         MCP eval image with Helm, tar, and pipeline tooling baked in.
         Used for the Helm deployment step.

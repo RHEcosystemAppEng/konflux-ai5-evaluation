@@ -31,9 +31,9 @@ spec:
               fi
 
               mkdir -p /tmp/tasks
-              envsubst < /opt/suites/mcp/default/eval.yaml > /tmp/eval.yaml
-              cp /opt/suites/mcp/default/tasks/*.yaml /tmp/tasks/
-              envsubst < /opt/suites/mcp/default/mcp-config.yaml > /tmp/mcp-config.yaml
+              envsubst < ${SUITES_DIR}/eval.yaml > /tmp/eval.yaml
+              cp ${SUITES_DIR}/tasks/*.yaml /tmp/tasks/
+              envsubst < ${SUITES_DIR}/mcp-config.yaml > /tmp/mcp-config.yaml
 
               cd /tmp
               mcpchecker check eval.yaml \

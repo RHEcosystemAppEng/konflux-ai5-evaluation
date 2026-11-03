@@ -55,7 +55,7 @@ spec:
         Optional — if the secret does not exist, TLS uses default system CAs.
     - name: mcp-eval-image
       type: string
-      default: "quay.io/ecosystem-appeng/abevalflow-mcp-eval:0.1"
+      default: "quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1"
       description: >-
         MCP eval image with mcpchecker binary, task suite files, and
         aggregation scripts baked in.
@@ -68,8 +68,15 @@ spec:
         servers may mount the endpoint at a different path.
     - name: job-template
       type: string
-      default: "/opt/templates/mcp-behavioral-eval-job.yaml"
-      description: Path to the Kubernetes Job template for behavioral evaluation
+      default: "templates/mcp-behavioral-eval-job.yaml"
+      description: >-
+        Relative path to the Kubernetes Job template (from task directory).
+        Override with an absolute path if needed.
+    - name: suites-dir
+      type: string
+      default: "suites/default"
+      description: >-
+        Relative path to the mcpchecker task suites directory (from task directory).
     - name: secrets-namespace
       type: string
       default: "default"
@@ -130,6 +137,8 @@ spec:
       image: $(params.mcp-eval-image)
       imagePullPolicy: Always
       env:
+        - name: TASK_NAME
+          value: $(context.task.name)
         - name: NAMESPACE
           value: $(params.namespace-name)
         - name: JOB_NAME
@@ -148,14 +157,22 @@ spec:
           value: $(params.llm-ca-secret)
         - name: JOB_TEMPLATE
           value: $(params.job-template)
+        - name: SUITES_DIR_PARAM
+          value: $(params.suites-dir)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
 
+        # Derive Python module name from task name
+        TASK_MODULE="${TASK_NAME//-/_}"
+
+        # Export suite directory path for template substitution
+        export SUITES_DIR="/opt/${TASK_MODULE}/${SUITES_DIR_PARAM}"
+
         # shellcheck disable=SC2016  # envsubst variable spec is intentionally single-quoted
         envsubst \
-          '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${MCP_URL} ${AGENT_SECRET} ${JUDGE_SECRET} ${CA_SECRET}' \
-          < "$JOB_TEMPLATE" \
+          '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${MCP_URL} ${AGENT_SECRET} ${JUDGE_SECRET} ${CA_SECRET} ${SUITES_DIR}' \
+          < "/opt/${TASK_MODULE}/${JOB_TEMPLATE}" \
           > "$(workspaces.source.path)/behavioral-eval-job.yaml"
 
         echo "Generated Job manifest:"
