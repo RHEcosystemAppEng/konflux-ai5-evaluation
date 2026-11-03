@@ -139,7 +139,7 @@ spec:
 
         # Generate Job manifest from template
         envsubst \
-          '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${CONFIGMAP_NAME} ${COMPASS_SECRET} ${DRY_RUN}' \
+          '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${CONFIGMAP_NAME} ${COMPASS_SECRET} ${DRY_RUN} ${TASK_MODULE}' \
           < "/opt/${TASK_MODULE}/${JOB_TEMPLATE}" \
           > "$(workspaces.source.path)/compass-publish-job.yaml"
 

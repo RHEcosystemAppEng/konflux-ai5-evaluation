@@ -22,7 +22,7 @@ spec:
             - |
               import json, os, sys, urllib.request, urllib.error
               from pathlib import Path
-              from scripts.compass_fact_validator import validate_compass_fact_file
+              from ${TASK_MODULE}.scripts.compass_fact_validator import validate_compass_fact_file
 
               facts_dir = Path("/mnt/facts")
               compass_url = os.environ["COMPASS_URL"]

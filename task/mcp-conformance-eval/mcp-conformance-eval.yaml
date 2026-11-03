@@ -127,7 +127,7 @@ spec:
 
         # shellcheck disable=SC2016  # envsubst variable spec is intentionally single-quoted
         envsubst \
-          '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${SERVER_URL} ${TIMEOUT} ${OPENAPI_URL} ${COMPASS_SECRET}' \
+          '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${SERVER_URL} ${TIMEOUT} ${OPENAPI_URL} ${COMPASS_SECRET} ${TASK_MODULE}' \
           < "/opt/${TASK_MODULE}/${JOB_TEMPLATE}" \
           > "$(workspaces.source.path)/conformance-eval-job.yaml"
 
