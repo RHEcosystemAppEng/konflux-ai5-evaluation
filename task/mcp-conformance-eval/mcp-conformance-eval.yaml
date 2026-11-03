@@ -122,8 +122,8 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        # Derive Python module name from task name
-        TASK_MODULE="${TASK_NAME//-/_}"
+        # Derive Python module name from task name and export for envsubst
+        export TASK_MODULE="${TASK_NAME//-/_}"
 
         # shellcheck disable=SC2016  # envsubst variable spec is intentionally single-quoted
         envsubst \
@@ -235,7 +235,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        # Derive Python module name from task name
+        # Derive Python module name from task name (no export needed for bash command)
         TASK_MODULE="${TASK_NAME//-/_}"
 
         RESULTS_DIR="$(workspaces.source.path)/results"

@@ -126,8 +126,8 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        # Derive Python module name from task name
-        TASK_MODULE="${TASK_NAME//-/_}"
+        # Derive Python module name from task name and export for envsubst
+        export TASK_MODULE="${TASK_NAME//-/_}"
 
         FACTS_DIR="$(workspaces.source.path)/$FACTS_DIR"
 
