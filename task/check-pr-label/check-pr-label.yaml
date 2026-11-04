@@ -1,14 +1,4 @@
-# Opt-in gate for a Tier-B/expensive chain further down a pipeline: "true"
-# only when the merged merge request for the given commit carries a given
-# label. Fails closed -- no merged MR at all (e.g. a direct push) also
-# returns "false".
-#
-# GitLab-specific by design: calls the GitLab REST API
-# (`/projects/:id/repository/commits/:sha/merge_requests`) directly. Reusable
-# across any GitLab-hosted project -- gitlab-server-url/gitlab-project-path/
-# label-name are all parameterized below (defaulted to the values
-# agentic-plugins itself uses), and git-token-secret-name/-key let a caller
-# point at their own GitLab personal/project access token Secret.
+# Version 0.1.0 bundles remain unchanged for legacy consumers.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
@@ -16,100 +6,156 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/version: 0.2.1
 spec:
-  description: >-
-    Checks whether the MERGED merge request for a given commit SHA on a
-    GitLab project carries a given label. Returns "true" only in that case;
-    "false" otherwise, including when no merged MR is found at all
-    (fail-closed). Intended to gate an expensive/opt-in chain later in a
-    pipeline (e.g. an LLM evaluation step) behind an explicit label on the
-    merged MR.
+  description: Select explicit evaluation tiers, or opt into Tier 2 using the merged MR for this exact commit and
+    target branch. API and TLS failures fail the task.
   params:
-    - name: current-sha
-      type: string
-      description: Commit SHA to look up merge requests for.
-    - name: label-name
-      type: string
-      default: "evaluate"
-      description: Label that must be present on the merged MR for this result to be "true".
-    - name: gitlab-server-url
-      type: string
-      default: "https://gitlab.cee.redhat.com"
-      description: Base URL of the GitLab server hosting the project.
-    - name: gitlab-project-path
-      type: string
-      default: "ai5-marketplace%2Fagentic-plugins"
-      description: >-
-        URL-encoded "namespace%2Fproject" path of the GitLab project (as
-        used in GitLab's REST API project ID position).
-    - name: git-token-secret-name
-      type: string
-      default: "agentic-plugins-gitlab-sa"
-      description: Name of the Secret containing a GitLab access token with API read access to the project.
-    - name: git-token-secret-key
-      type: string
-      default: "password"
-      description: Key within git-token-secret-name holding the GitLab access token.
+  - name: tiers
+    type: string
+    default: auto
+    description: auto uses the merged-MR label; 1 and 1,2 explicitly select tiers without an API lookup.
+  - name: target-branch
+    type: string
+    description: Exact destination branch of the merged MR; required with auto.
+  - name: ca-bundle-configmap
+    type: string
+    default: trusted-ca
+    description: Optional additional GitLab CA trust bundle.
+  - name: current-sha
+    type: string
+    description: Commit SHA to look up merge requests for.
+  - name: label-name
+    type: string
+    default: evaluate
+    description: Label that must be present on the merged MR for this result to be "true".
+  - name: gitlab-server-url
+    type: string
+    default: https://gitlab.cee.redhat.com
+    description: Base URL of the GitLab server hosting the project.
+  - name: gitlab-project-path
+    type: string
+    default: ai5-marketplace%2Fagentic-plugins
+    description: URL-encoded "namespace%2Fproject" path of the GitLab project (as used in GitLab's REST API project
+      ID position).
+  - name: git-token-secret-name
+    type: string
+    default: agentic-plugins-gitlab-sa
+    description: Name of the Secret containing a GitLab access token with API read access to the project.
+  - name: git-token-secret-key
+    type: string
+    default: password
+    description: Key within git-token-secret-name holding the GitLab access token.
   results:
-    - name: should-evaluate
-      description: "'true' only if a MERGED MR for current-sha carries the label-name label; 'false' otherwise (including when no merged MR is found at all)"
+  - name: should-evaluate
+    description: true when Tier 2 was selected, false otherwise.
+  - name: tiers
+    description: 'Resolved tiers: 1 or 1,2.'
   steps:
-    - name: check-label
-      image: registry.access.redhat.com/ubi9/python-311:latest
-      env:
-        - name: CURRENT_SHA
-          value: $(params.current-sha)
-        - name: LABEL_NAME
-          value: $(params.label-name)
-        - name: GITLAB_SERVER_URL
-          value: $(params.gitlab-server-url)
-        - name: GITLAB_PROJECT_PATH
-          value: $(params.gitlab-project-path)
-        - name: GIT_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: $(params.git-token-secret-name)
-              key: $(params.git-token-secret-key)
-      script: |
-        #!/usr/bin/env bash
-        set -euo pipefail
-        python3 << 'PYEOF' > "$(results.should-evaluate.path)"
-        import json
-        import os
-        import ssl
-        import sys
-        import urllib.request
+  - name: check-label
+    image: registry.access.redhat.com/ubi9/python-311:latest@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c
+    env:
+    - name: TIERS
+      value: $(params.tiers)
+    - name: TARGET_BRANCH
+      value: $(params.target-branch)
+    - name: CURRENT_SHA
+      value: $(params.current-sha)
+    - name: LABEL_NAME
+      value: $(params.label-name)
+    - name: GITLAB_SERVER_URL
+      value: $(params.gitlab-server-url)
+    - name: GITLAB_PROJECT_PATH
+      value: $(params.gitlab-project-path)
+    - name: GIT_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: $(params.git-token-secret-name)
+          key: $(params.git-token-secret-key)
+          optional: true
+    script: |
+      #!/usr/bin/env python3
+      import json
+      import os
+      import re
+      import ssl
+      import time
+      import urllib.error
+      import urllib.parse
+      import urllib.request
+      from pathlib import Path
 
-        sha = os.environ["CURRENT_SHA"]
-        token = os.environ["GIT_TOKEN"]
-        label_name = os.environ["LABEL_NAME"]
-        server_url = os.environ["GITLAB_SERVER_URL"]
-        project_path = os.environ["GITLAB_PROJECT_PATH"]
-        url = (
-            f"{server_url}/api/v4/projects/{project_path}"
-            f"/repository/commits/{sha}/merge_requests"
-        )
-        req = urllib.request.Request(url, headers={"PRIVATE-TOKEN": token})
-        ctx = ssl._create_unverified_context()
-        try:
-            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
-                mrs = json.loads(resp.read())
-        except Exception as e:
-            print(f"warning: GitLab merge_requests lookup failed for {sha}: {e}", file=sys.stderr)
-            mrs = []
+      mode = os.environ["TIERS"]
+      if mode not in {"auto", "1", "1,2"}:
+          raise SystemExit("tiers must be auto, 1, or 1,2")
 
-        merged = [mr for mr in mrs if mr.get("state") == "merged"]
-        labeled = [mr for mr in merged if label_name in (mr.get("labels") or [])]
+      selected = mode
+      if mode == "auto":
+          sha = os.environ["CURRENT_SHA"]
+          branch = os.environ["TARGET_BRANCH"]
+          token = os.environ.get("GIT_TOKEN", "")
+          server = os.environ["GITLAB_SERVER_URL"].rstrip("/")
+          parsed = urllib.parse.urlsplit(server)
+          if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.query or parsed.fragment:
+              raise SystemExit("GitLab must use HTTPS without embedded credentials or query parameters")
+          if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) or not branch or not token:
+              raise SystemExit("auto requires a full commit SHA, target branch and GitLab API token")
+          project = urllib.parse.quote(urllib.parse.unquote(os.environ["GITLAB_PROJECT_PATH"]), safe="")
+          context = ssl.create_default_context()
+          ca = Path("/var/trusted-ca/ca-bundle.crt")
+          if ca.is_file() and ca.stat().st_size:
+              context.load_verify_locations(cafile=str(ca))
+          matches = []
+          # The push webhook can precede GitLab updating the MR's merged state.
+          for attempt in range(3):
+              rows = []
+              page = "1"
+              for _ in range(10):
+                  query = urllib.parse.urlencode({"per_page": 100, "page": page})
+                  request = urllib.request.Request(
+                      f"{server}/api/v4/projects/{project}/repository/commits/{sha}/merge_requests?{query}",
+                      headers={"PRIVATE-TOKEN": token, "Accept": "application/json"},
+                  )
+                  try:
+                      with urllib.request.urlopen(request, context=context, timeout=30) as response:
+                          body = json.load(response)
+                          page = response.headers.get("X-Next-Page", "")
+                  except (urllib.error.URLError, OSError, ValueError) as error:
+                      raise SystemExit("Cannot resolve evaluation label; retry the build: " + str(getattr(error, "reason", error))) from error
+                  if not isinstance(body, list) or any(not isinstance(row, dict) for row in body):
+                      raise SystemExit("Invalid GitLab MR response")
+                  rows.extend(body)
+                  if not page:
+                      break
+                  if not page.isdigit():
+                      raise SystemExit("Invalid GitLab pagination")
+              else:
+                  raise SystemExit("Too many associated MRs to resolve evaluation safely")
+              matches = [row for row in rows if row.get("state") == "merged"
+                         and row.get("target_branch") == branch
+                         and (sha in (row.get("merge_commit_sha"), row.get("squash_commit_sha"))
+                              or (not row.get("merge_commit_sha") and not row.get("squash_commit_sha")
+                                  and (row.get("sha") or (row.get("diff_refs") or {}).get("head_sha")) == sha))]
+              if matches:
+                  break
+              if attempt < 2:
+                  time.sleep(2)
+          if len(matches) > 1:
+              raise SystemExit("Ambiguous merged MR for this exact commit and target branch")
+          labeled = bool(matches and os.environ["LABEL_NAME"] in (matches[0].get("labels") or []))
+          selected = "1,2" if labeled else "1"
+          print("Merged MR: " + str(matches[0].get("iid") if matches else "none") + "; selected tiers: " + selected)
+      else:
+          print("Explicit tiers: " + selected + "; GitLab label lookup not needed")
 
-        if not merged:
-            print(f"No merged MR found for {sha} -- skipping evaluation (fail-closed)", file=sys.stderr)
-        elif labeled:
-            print(f"Merged MR !{labeled[0].get('iid')} has the '{label_name}' label -- evaluation approved", file=sys.stderr)
-        else:
-            iids = ", ".join(f"!{mr.get('iid')}" for mr in merged)
-            print(f"Merged MR(s) {iids} found but none labeled '{label_name}' -- skipping evaluation", file=sys.stderr)
-
-        print("true" if labeled else "false", end="")
-        PYEOF
-        echo "should-evaluate: $(cat "$(results.should-evaluate.path)")"
+      Path("$(results.tiers.path)").write_text(selected)
+      Path("$(results.should-evaluate.path)").write_text("true" if selected == "1,2" else "false")
+    volumeMounts:
+    - name: trusted-ca
+      mountPath: /var/trusted-ca
+      readOnly: true
+  volumes:
+  - name: trusted-ca
+    configMap:
+      name: $(params.ca-bundle-configmap)
+      optional: true

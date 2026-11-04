@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.0
+
+- Require an explicit evaluation image containing CLI 0.6.0 or newer.
+- Add an optional component manifest to bind full-plugin evidence to the image.
+- Include component evidence in the OCI report archive before attachment.
+- Emit standard TEST_OUTPUT and IMAGES_PROCESSED, and bounded PLUGIN_EVALUATION.
+
 ## 2.1.4
 
 - Use runner `v1.0.6` with CLI `0.5.1`, which records its installed version in

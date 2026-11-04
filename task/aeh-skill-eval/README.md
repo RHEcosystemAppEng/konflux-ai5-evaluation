@@ -1,6 +1,6 @@
 # aeh-skill-eval
 
-Version 2.1.4 evaluates an explicit array of changed skills through one installed
+Version 3.0.0 evaluates an explicit array of skills through one installed
 `abeval batch` invocation. The CLI runs the existing single-skill workflow in
 sequence; configured plugin trees, MCP fixtures, tiers, policy, reporting, and
 PostgreSQL/S3/Compass persistence are unchanged. Separate pipeline runs may run
@@ -24,12 +24,19 @@ No shell skill loop, new controller, queue, or whole-batch automatic retry is us
 
 ## Parameters
 
+For a per-plugin Component, use the entire `SKILLS` array emitted by
+`prepare-plugin-oci-ta` and set `component-manifest` to
+`.konflux/package/manifest.json`. This verifies complete plugin coverage before
+attaching OCI evidence. An explicit evaluation image containing CLI 0.6.0 or
+newer is required; pin it by digest in consuming pipelines.
+
 | Parameter | Default | Purpose |
 |---|---|---|
 | `changed-skills` | `[]` | Ordered catalog skill identifiers; an empty list is a successful no-op. |
 | `submission-revision` | `Required` | Evaluated source commit SHA. |
 | `source-artifact` | `Required` | Trusted source artifact for the evaluated revision. |
-| `evaluation-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.6-runner` | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
+| `evaluation-image` | `Required` | Digest-pinned CLI 0.6.0+ image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
+| `component-manifest` | `Disabled` | Trusted-source-relative package manifest for complete plugin evidence. |
 | `tiers` | `1` | Evaluation tiers passed directly to the CLI: 1, 2, or 1,2. |
 | `n-concurrent` | `1` | Maximum AEH trial cases run concurrently by the CLI. |
 | `aeh-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-trial@sha256:374b28704de8562ae2d6130d84d8d33d99db7dfe9680315034b10db5308cc983` | Trial image pullable by the workload cluster; used for Tier 2. |
@@ -65,6 +72,9 @@ No shell skill loop, new controller, queue, or whole-batch automatic retry is us
 
 | Result | Meaning |
 |---|---|
+| `TEST_OUTPUT` | Standard Konflux Tier 1 result. |
+| `IMAGES_PROCESSED` | Standard pullspec and digest coverage. |
+| `PLUGIN_EVALUATION` | Compact component identity and evidence digest; empty for legacy batches. |
 | `TEST_OUTPUT_TIER_A` | Aggregate static result; unrequested tiers are excluded. |
 | `TEST_OUTPUT_TIER_B` | Aggregate informational trial result. |
 | `TEST_OUTPUT_PUBLICATION` | Aggregate application publication plus required OCI attachment. |
@@ -98,6 +108,8 @@ contracts. The optional CA bundle is mounted from `ca-bundle-configmap`.
       value: $(tasks.clone.results.SOURCE_ARTIFACT)
     - name: tiers
       value: '1,2'
+    - name: evaluation-image
+      value: $(params.evaluation-image)
     - name: persist
       value: postgres,s3
   workspaces:
@@ -105,7 +117,7 @@ contracts. The optional CA bundle is mounted from `ca-bundle-configmap`.
       workspace: evaluation-evidence
 ```
 
-Build and publish the 0.5.1 CLI runner before publishing the 2.1.4 task bundle.
+Build and publish the 0.6.0 CLI runner before publishing the 3.0.0 task bundle.
 Use the existing v1.0.2 trial image and 1.0.0 registration task. Upgrade both pipeline references together. Existing
 published 1.0.0 evaluation bundles retain their old interface.
 
@@ -116,4 +128,4 @@ With CLI 0.5.1, the batch invocation records the built component image as
 those inputs are supplied. This is separate from `aeh-image`, the trial runtime.
 The source revision is retained on every skill evaluation. The new PostgreSQL
 schema requires a fresh database; existing schema v1 tables are not modified or
-migrated. The task uses the v1.0.6 runner containing CLI 0.5.1.
+migrated. CLI 0.6.0 retains schema v2 and this image binding; select its runner explicitly by digest.

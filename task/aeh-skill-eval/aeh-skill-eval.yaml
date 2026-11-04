@@ -5,7 +5,7 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: 2.1.4
+    app.kubernetes.io/version: 3.0.0
 spec:
   description: >-
     Evaluate changed skills sequentially through one abeval batch invocation.
@@ -19,6 +19,10 @@ spec:
     - name: submission-revision
       type: string
       description: Evaluated source commit SHA.
+    - name: component-manifest
+      type: string
+      default: ''
+      description: Optional trusted-source-relative plugin manifest; requires complete skill coverage and OCI subject binding.
     - name: source-artifact
       type: string
       description: Trusted source artifact for the evaluated revision.
@@ -27,7 +31,6 @@ spec:
       description: >-
         Complete CLI image with both scanners, unchanged AEH runtime, model clients,
         and storage clients.
-      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.6-runner
     - name: tiers
       type: string
       default: '1'
@@ -159,6 +162,12 @@ spec:
     - name: source
       description: Scratch storage for isolated CLI runs; keyed by TaskRun name.
   results:
+    - name: TEST_OUTPUT
+      description: Standard Konflux Tier 1 result.
+    - name: IMAGES_PROCESSED
+      description: Standard Konflux image pullspec and digest coverage.
+    - name: PLUGIN_EVALUATION
+      description: Bounded component identity and evaluation evidence digest, or an empty object for legacy batches.
     - name: TEST_OUTPUT_TIER_A
       description: Konflux Tier 1 result, or SKIPPED when Tier 1 was not requested.
     - name: TEST_OUTPUT_TIER_B
@@ -191,6 +200,8 @@ spec:
         value: $(context.taskRun.name)
       - name: ABEVAL_REVISION
         value: $(params.submission-revision)
+      - name: COMPONENT_MANIFEST
+        value: $(params.component-manifest)
       - name: ABEVAL_PERSISTENCE_REQUIRED
         value: $(params.persistence-required)
     volumeMounts:
@@ -353,7 +364,13 @@ spec:
       args:
         - |
           set -euo pipefail
-          abeval batch-package --batch-dir "$ABEVAL_OUTPUT"
+          if [ -n "${COMPONENT_MANIFEST:-}" ]; then
+            abeval batch-package --batch-dir "$ABEVAL_OUTPUT" \
+              --component-manifest "$ABEVAL_SOURCE/$COMPONENT_MANIFEST" \
+              --image-url "$IMAGE_URL" --image-digest "$IMAGE_DIGEST"
+          else
+            abeval batch-package --batch-dir "$ABEVAL_OUTPUT"
+          fi
           # The OCI attachment step runs under a different image UID. Allow it to
           # access known files in this directory without exposing directory listings.
           chmod 0711 "$(dirname "$ABEVAL_OUTPUT")"

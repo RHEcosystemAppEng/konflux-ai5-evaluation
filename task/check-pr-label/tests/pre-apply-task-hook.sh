@@ -1,14 +1,3 @@
 #!/bin/bash
-# Creates a dummy GitLab token Secret so check-pr-label's (required,
-# non-optional) secretKeyRef can resolve. The test points gitlab-server-url
-# at an unreachable address, so the token's actual value is never used --
-# only its presence matters for the pod to start.
+# Explicit Tier 1 does not require GitLab credentials or cluster setup.
 set -e
-
-TEST_NS="$2"
-
-kubectl create secret generic test-dummy-gitlab-sa \
-  --from-literal=password=dummy-token \
-  -n "$TEST_NS" --dry-run=client -o yaml | kubectl apply -f -
-
-echo "Pre-requirements setup complete for namespace: $TEST_NS"

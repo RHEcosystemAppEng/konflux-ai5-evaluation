@@ -7,18 +7,21 @@ spec:
     - name: tests-workspace
       description: The workspace provided by the test runner script (unused by this test).
   tasks:
-    # No merge request can exist for this SHA at an unreachable server, so
-    # the Task must fail closed with "false" rather than erroring out.
+    # Explicit Tier 1 must not contact GitLab or require an API token.
     - name: run-check-pr-label
       taskRef:
         name: check-pr-label
       params:
+        - name: tiers
+          value: "1"
+        - name: target-branch
+          value: "pilot"
         - name: current-sha
-          value: "deadbeef"
+          value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         - name: label-name
           value: "evaluate"
         - name: gitlab-server-url
-          value: "http://127.0.0.1:1"
+          value: "https://127.0.0.1:1"
         - name: gitlab-project-path
           value: "test%2Ffixture"
         - name: git-token-secret-name
@@ -47,7 +50,7 @@ spec:
               set -e
               echo "should-evaluate=${SHOULD_EVALUATE}"
               if [ "$SHOULD_EVALUATE" != "false" ]; then
-                echo "FAIL: expected should-evaluate=false (fail-closed) for an unreachable GitLab server"
+                echo "FAIL: expected should-evaluate=false (fail-closed) for explicit Tier 1"
                 exit 1
               fi
-              echo "check-pr-label correctly failed closed"
+              echo "check-pr-label honored explicit Tier 1 without an API lookup"

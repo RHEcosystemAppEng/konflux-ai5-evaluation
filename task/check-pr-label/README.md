@@ -1,68 +1,39 @@
-# check-pr-label task
+# check-pr-label
 
-Checks whether the **merged** merge request for a given commit SHA on a
-GitLab project carries a given label. Returns `"true"` only in that case;
-`"false"` otherwise, including when no merged MR is found at all
-(fail-closed).
+Version 0.2.1 resolves evaluation tiers for GitLab Component builds. Existing
+0.1.0 bundles retain their previous interface and behavior.
 
-Intended to gate an expensive/opt-in chain later in a pipeline (e.g. an LLM
-evaluation step) behind an explicit label on the merged MR, so that
-expensive work only runs when a human reviewer opted in.
-
-GitLab-specific by design (calls the GitLab REST API directly), but
-reusable by **any** GitLab-hosted project -- every GitLab-specific detail is
-a parameter.
-
-## Parameters
-
-| name | description | default value | required |
-|---|---|---|---|
-| current-sha | Commit SHA to look up merge requests for. | | true |
-| label-name | Label that must be present on the merged MR for this result to be `"true"`. | `"evaluate"` | false |
-| gitlab-server-url | Base URL of the GitLab server hosting the project. | `"https://gitlab.cee.redhat.com"` | false |
-| gitlab-project-path | URL-encoded `namespace%2Fproject` path of the GitLab project. | `"ai5-marketplace%2Fagentic-plugins"` | false |
-| git-token-secret-name | Name of the Secret containing a GitLab access token with API read access to the project. | `"agentic-plugins-gitlab-sa"` | false |
-| git-token-secret-key | Key within `git-token-secret-name` holding the GitLab access token. | `"password"` | false |
-
-## Results
-
-| name | description |
+| `tiers` | Behavior |
 |---|---|
-| should-evaluate | `"true"` only if a MERGED MR for `current-sha` carries the `label-name` label; `"false"` otherwise. |
+| `1` | Tier 1; no GitLab request or API token required |
+| `1,2` | Both tiers; explicit on-demand override, no GitLab request required |
+| `auto` | Both tiers only when the merged MR for the exact commit and target branch has `evaluate`; otherwise Tier 1 |
 
-## Secrets
+Pass `current-sha` from the trusted clone result and `target-branch` from the
+configured Component branch. `auto` uses `gitlab-server-url`, URL-encoded
+`gitlab-project-path`, `label-name` (default `evaluate`), and a read-API token
+from `git-token-secret-name` / `git-token-secret-key`. The Secret reference is
+optional for explicit selections, but a token is required for `auto`.
 
-| Secret (param) | Key (param) | Required | Purpose |
-|---|---|---|---|
-| `git-token-secret-name` (default `agentic-plugins-gitlab-sa`) | `git-token-secret-key` (default `password`) | yes | GitLab personal/project access token with `read_api` scope, used to query merge requests for a commit. |
+Merge, squash and fast-forward identities are supported. Other branches, older
+commits and open MRs do not request Tier 2. A short bounded retry handles the
+push/merge-state race. API/TLS errors, invalid responses and ambiguous matches
+fail the task instead of silently skipping requested evaluation. TLS verification
+is enabled; `ca-bundle-configmap` (default `trusted-ca`) optionally adds trust from `ca-bundle.crt`.
 
-No ConfigMaps are used by this Task.
+Results are `tiers` (`1` or `1,2`) and `should-evaluate` (`true` when Tier 2 was
+selected). The pipeline passes the resolved tiers into the evaluator and records
+them in signed results. The label requests execution; managed qualification
+policy still decides which evidence and outcomes are required for release.
 
-## Usage
+Apply the label before merging the final relevant MR. The evaluation covers the
+entire affected plugin at that merged revision, including earlier merged changes.
+An unrelated plugin's path does not start this Component. For later evaluation
+without a new relevant MR, use an explicit `tiers=1,2` build for the selected
+Component and immutable revision. Rechecking ITS evidence alone does not run
+missing trials.
 
-```yaml
-- name: check-pr-label
-  taskRef:
-    resolver: bundles
-    params:
-    - name: name
-      value: check-pr-label
-    - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/check-pr-label:0.1.0@sha256:27196ca1f4bc04b570ff230e9ccbb174faf8beabd2240db7222c2f5cc2649eb6"
-    - name: kind
-      value: task
-  params:
-  - name: current-sha
-    value: $(params.revision)
-  - name: label-name
-    value: "evaluate"
-  - name: gitlab-server-url
-    value: "https://gitlab.cee.redhat.com"
-  - name: gitlab-project-path
-    value: "my-group%2Fmy-project"
-  - name: git-token-secret-name
-    value: "my-gitlab-sa"
-```
-
-Consume the result downstream as `$(tasks.check-pr-label.results.should-evaluate)`,
-e.g. as a `when:` expression gating a later Task/Matrix.
+Run `python -m unittest discover -s tests -v` for the executable selector fixture
+tests (label/no label, identity/branch filters, squash/fast-forward, explicit
+overrides, API errors and ambiguity). The native smoke pipeline checks explicit
+Tier 1 against an unreachable endpoint without requiring a token.
