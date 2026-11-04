@@ -1,6 +1,6 @@
 # aeh-skill-eval
 
-Version 2.1.3 evaluates an explicit array of changed skills through one installed
+Version 2.1.4 evaluates an explicit array of changed skills through one installed
 `abeval batch` invocation. The CLI runs the existing single-skill workflow in
 sequence; configured plugin trees, MCP fixtures, tiers, policy, reporting, and
 PostgreSQL/S3/Compass persistence are unchanged. Separate pipeline runs may run
@@ -29,7 +29,7 @@ No shell skill loop, new controller, queue, or whole-batch automatic retry is us
 | `changed-skills` | `[]` | Ordered catalog skill identifiers; an empty list is a successful no-op. |
 | `submission-revision` | `Required` | Evaluated source commit SHA. |
 | `source-artifact` | `Required` | Trusted source artifact for the evaluated revision. |
-| `evaluation-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.5-runner@sha256:961abe053e959ac0f4d3cf849cdd86f06a27368128ca902aaabced092932d12e` | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
+| `evaluation-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.6-runner` | Complete CLI image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
 | `tiers` | `1` | Evaluation tiers passed directly to the CLI: 1, 2, or 1,2. |
 | `n-concurrent` | `1` | Maximum AEH trial cases run concurrently by the CLI. |
 | `aeh-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-trial@sha256:374b28704de8562ae2d6130d84d8d33d99db7dfe9680315034b10db5308cc983` | Trial image pullable by the workload cluster; used for Tier 2. |
@@ -105,15 +105,15 @@ contracts. The optional CA bundle is mounted from `ca-bundle-configmap`.
       workspace: evaluation-evidence
 ```
 
-Build and publish the 0.5.0 CLI runner before publishing the 2.1.3 task bundle.
+Build and publish the 0.5.1 CLI runner before publishing the 2.1.4 task bundle.
 Use the existing v1.0.2 trial image and 1.0.0 registration task. Upgrade both pipeline references together. Existing
 published 1.0.0 evaluation bundles retain their old interface.
 
 ### PostgreSQL evidence schema v2
 
-With CLI 0.5.0, the batch invocation records the built component image as
+With CLI 0.5.1, the batch invocation records the built component image as
 `ABEVAL_BUILT_IMAGE_REF=<image-url>@<image-digest>` for every evaluated skill when
 those inputs are supplied. This is separate from `aeh-image`, the trial runtime.
 The source revision is retained on every skill evaluation. The new PostgreSQL
 schema requires a fresh database; existing schema v1 tables are not modified or
-migrated. The task pins the v1.0.5 runner containing CLI 0.5.0 by digest.
+migrated. The task uses the v1.0.6 runner containing CLI 0.5.1.

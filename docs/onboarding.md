@@ -25,7 +25,7 @@ through AEH/Harbor. The runner image includes the `skill-scanner` and
 | `check-pr-label:0.1.0` | This repository, published as a Tekton bundle | Set your GitLab server, URL-encoded project path, label, and token Secret. |
 | `discover-changed-skills:0.1.0` | This repository, published as a Tekton bundle | Supply your repository URL, detection script, catalog, and read credentials. |
 | Tier selection (`auto` → `1` or `1,2`) | An inline task in the consuming pipeline | Copy the selector from the companion example; it is not another shared bundle. |
-| `aeh-skill-eval:2.1.3` | This repository, published as a Tekton bundle | Supply skill IDs, trusted source, revision, endpoints, credentials, and evidence workspace. |
+| `aeh-skill-eval:2.1.4` | This repository, published as a Tekton bundle | Supply skill IDs, trusted source, revision, endpoints, credentials, and evidence workspace. |
 | `abeval` CLI and complete upstream AEH runtime | [agentic_eval_flow](https://github.com/RHEcosystemAppEng/agentic_eval_flow), packaged in the runner image | Consume the runner image; no evaluator checkout or installation in your build is needed. |
 | Trial runtime | The separate `agent-eval-harness` trial image | Ensure the workload cluster can pull it. This is different from your built plugin image. |
 | Skill content, submissions, cases, judges, MCP schemas/fixtures | Your plugin repository | Commit these alongside the skills. |
@@ -270,7 +270,7 @@ configurable, but the evaluation Secret keys are fixed.
 | Secret `plugin-evaluation-git` | `password` (configurable via `git-token-secret-key`) | Always for discovery and label lookup; also used for registration push. Token needs API read, repository read, and repository write permissions (`read_api`, `read_repository`, `write_repository` or equivalent). The bot must be allowed to push to the target branch. |
 | Secret `plugin-evaluation-llm` | `api-key` | Tier 2 review/judging and any enabled skill review; also supplies the runner's agent/judge API credentials. |
 | Secret `plugin-evaluation-kubeconfig` | `kubeconfig` | Tier 2 access to the workload cluster as the controller identity. |
-| Secret `plugin-evaluation-db` | `database-url`; optional `database-tls-route-host` | When `persist` includes `postgres`. Use a fresh database compatible with CLI 0.5.0 evidence schema v2; schema v1 is not migrated. |
+| Secret `plugin-evaluation-db` | `database-url`; optional `database-tls-route-host` | When `persist` includes `postgres`. Use a fresh database compatible with CLI 0.5.1 evidence schema v2; schema v1 is not migrated. |
 | Secret `plugin-evaluation-s3` | `endpoint-url`, `root-user`, `root-password`; optional `insecure-skip-tls-verify` | When `persist` includes `s3`. The user/password keys carry an S3 access key and secret key; the names do not require a root account. |
 | Secret `plugin-evaluation-compass` | `token` | Only when `persist` includes `compass`; submissions must also configure `gate_policy.push_facts`. |
 | ConfigMap `plugin-evaluation-ca` | `ca-bundle.crt` | Optional private CA bundle mounted in the runner. Not needed for publicly trusted endpoints. |
@@ -426,16 +426,16 @@ taskRef:
     - name: name
       value: aeh-skill-eval
     - name: bundle
-      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:2.1.3@sha256:a1b6c84196f8f63bf8b530f25d6a3ba8167f2acbfefc4efb3de2fa31db3fb4b3
+      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:2.1.4
     - name: kind
       value: task
 ```
 
 Use the companion's digest-pinned refs for `check-pr-label:0.1.0`,
-`discover-changed-skills:0.1.0`, `aeh-skill-eval:2.1.3`, and
+`discover-changed-skills:0.1.0`, `aeh-skill-eval:2.1.4`, and
 `update-registered-shas:1.0.0`. A bare `taskRef.name` assumes cluster-installed
 Tasks and does not resolve these published bundles. Bundle versions are distinct
-from runtime image versions: the example uses runner `v1.0.5-runner` (CLI 0.5.0)
+from runtime image versions: the example uses runner `v1.0.6-runner` (CLI 0.5.1)
 and trial `v1.0.2-trial`, each pinned by digest. The Pipeline's `trial-image`
 parameter maps to the shared task's `aeh-image` parameter. Consumers do not need
 to build or publish any of these shared images.
@@ -543,7 +543,7 @@ publication use `persist=''`; merely omitting credentials while keeping
 | Pod cannot start because of a Secret/key | Match Secret names, fixed keys, and namespaces. Controller Secrets live in Konflux; SDK credentials live on the workload cluster. |
 | Trial pods fail with Forbidden or readiness errors | Check the kubeconfig's identity, namespace RoleBinding, pod/log/exec access, named Secret read access, and trial service account. |
 | Models return authentication, URL, or TLS errors | Check native workload SDK keys, model availability, `/v1` versus gateway-root URLs, endpoint reachability, and CA files in both execution locations. |
-| PostgreSQL publication rejects the schema | Point at a fresh evidence schema v2 database for CLI 0.5.0. The runtime does not migrate schema v1. |
+| PostgreSQL publication rejects the schema | Point at a fresh evidence schema v2 database for CLI 0.5.1. The runtime does not migrate schema v1. |
 | Static checks pass but the task fails publication | Inspect selected `persist` destinations and OCI attachment; verify credentials, service availability, bucket/database permissions, and registry write access. |
 | No catalog update | Check Tier 2 selection, static/publication gates, per-skill runtime outcomes, manifest identity, and bot branch permissions. |
 | Registration push is rejected after another merge | The task does not rebase/retry competing pushes. Re-run evaluation for the current target revision; do not force-push a stale discovery clone. |

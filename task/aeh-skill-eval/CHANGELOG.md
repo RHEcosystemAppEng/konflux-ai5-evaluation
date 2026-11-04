@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.4
+
+- Use runner `v1.0.6` with CLI `0.5.1`, which records its installed version in
+  persisted evaluation evidence and includes the consolidated HTML report.
+
 ## 2.1.3
 
 - Pin `v1.0.5-runner` with explicit scoring breakdowns and absolute treatment reward gates.

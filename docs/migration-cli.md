@@ -1,5 +1,9 @@
 # CLI task migration (1.0.0)
 
+## Consolidated HTML reporting (evaluation 2.1.4, CLI 0.5.1)
+
+Use the `v1.0.6-runner` image with the existing `v1.0.2-trial` image. Upgrade the evaluation task bundle to `2.1.4`; CLI 0.5.1 is recorded as the evaluator version in persisted PostgreSQL evidence.
+
 ## Score summaries, evidence schema, and trial concurrency (evaluation 2.1.3, CLI 0.5.0)
 
 Use `v1.0.5-runner` with the existing `v1.0.2-trial` image, both pinned by

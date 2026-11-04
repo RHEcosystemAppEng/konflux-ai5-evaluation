@@ -29,7 +29,7 @@ spec:
         default: 'true'
       - name: evaluation-image
         type: string
-        default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.5-runner@sha256:961abe053e959ac0f4d3cf849cdd86f06a27368128ca902aaabced092932d12e
+        default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.6-runner
       - name: trial-image
         type: string
         default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-trial@sha256:374b28704de8562ae2d6130d84d8d33d99db7dfe9680315034b10db5308cc983
@@ -254,7 +254,7 @@ spec:
             - name: name
               value: aeh-skill-eval
             - name: bundle
-              value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:2.1.3@sha256:a1b6c84196f8f63bf8b530f25d6a3ba8167f2acbfefc4efb3de2fa31db3fb4b3
+              value: quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:2.1.4
             - name: kind
               value: task
         params:
