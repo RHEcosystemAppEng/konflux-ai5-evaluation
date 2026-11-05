@@ -1,0 +1,1 @@
+# mcp-static-eval package

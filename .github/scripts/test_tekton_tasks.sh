@@ -140,6 +140,24 @@ for ITEM in "${TEST_ITEMS[@]}"; do
     ${KUBECTL_CMD} create sa appstudio-pipeline -n "${TEST_NS}"
   fi
 
+  # Create registry pull secret if credentials are available
+  if [ -n "${REDHAT_REGISTRY_USERNAME:-}" ] && [ -n "${REDHAT_REGISTRY_PASSWORD:-}" ]; then
+    if ! ${KUBECTL_CMD} get secret redhat-pull-secret -n "${TEST_NS}" &>/dev/null; then
+      ${KUBECTL_CMD} create secret docker-registry redhat-pull-secret \
+        --docker-server=registry.redhat.io \
+        --docker-username="$REDHAT_REGISTRY_USERNAME" \
+        --docker-password="$REDHAT_REGISTRY_PASSWORD" \
+        --namespace="${TEST_NS}"
+      echo "Created registry pull secret in ${TEST_NS}"
+    fi
+
+    # Link pull secret to serviceaccount
+    ${KUBECTL_CMD} patch serviceaccount appstudio-pipeline \
+      -n "${TEST_NS}" \
+      -p '{"imagePullSecrets": [{"name": "redhat-pull-secret"}]}'
+    echo "Linked pull secret to appstudio-pipeline serviceaccount"
+  fi
+
   # dry-run this YAML to validate and also get formatting side-effects.
   ${KUBECTL_CMD} -n "${TEST_NS}" create -f "${TASK_COPY}" --dry-run=client -o yaml
 
@@ -158,7 +176,7 @@ for ITEM in "${TEST_ITEMS[@]}"; do
       sleep 5
     done
 
-    PIPELINERUN=$(tkn p start "$TEST_NAME" -n "${TEST_NS}" -w name=tests-workspace,volumeClaimTemplateFile="$WORKSPACE_TEMPLATE"  -o json | jq -r '.metadata.name')
+    PIPELINERUN=$(tkn p start "$TEST_NAME" -n "${TEST_NS}" -w name=tests-workspace,volumeClaimTemplateFile="$WORKSPACE_TEMPLATE" --serviceaccount appstudio-pipeline -o json | jq -r '.metadata.name')
     echo "INFO: Started pipelinerun: $PIPELINERUN"
     sleep 1  # allow a second for the prun object to appear (including a status condition)
     while [ "$(${KUBECTL_CMD} get pr "$PIPELINERUN" -n "${TEST_NS}" -o=jsonpath='{.status.conditions[0].status}')" == "Unknown" ]; do
