@@ -1,0 +1,56 @@
+# Tests the "skipped" path: when no fact files exist in the facts-dir,
+# the task should complete successfully with publish-status="skipped"
+# rather than erroring out. This verifies the task's early-exit logic
+# before attempting any cluster operations.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-publish-to-compass
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: run-publish-to-compass
+      taskRef:
+        name: publish-to-compass
+      params:
+        - name: facts-dir
+          value: "nonexistent-facts-dir"
+        - name: namespace-name
+          value: "mcp-eval-test"
+        - name: compass-secret
+          value: "mcp-eval-compass"
+        - name: dry-run
+          value: "true"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+        - name: target-kubeconfig
+          workspace: tests-workspace
+
+    - name: verify-skipped
+      runAfter:
+        - run-publish-to-compass
+      params:
+        - name: publish-status
+          value: $(tasks.run-publish-to-compass.results.publish-status)
+      taskSpec:
+        params:
+          - name: publish-status
+            type: string
+        steps:
+          - name: check-skipped
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            env:
+              - name: PUBLISH_STATUS
+                value: $(params.publish-status)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "publish-status=${PUBLISH_STATUS}"
+              if [ "$PUBLISH_STATUS" != "skipped" ]; then
+                echo "FAIL: expected publish-status=skipped when no fact files exist, got '${PUBLISH_STATUS}'"
+                exit 1
+              fi
+              echo "publish-to-compass correctly skipped when no fact files exist"

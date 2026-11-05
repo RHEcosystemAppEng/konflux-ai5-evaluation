@@ -1,0 +1,153 @@
+# Tests actual readiness checking using in-cluster kubeconfig.
+# Creates a simple deployment and verifies wait-ready successfully waits for it.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-wait-ready
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: setup-kubeconfig
+      taskSpec:
+        workspaces:
+          - name: kubeconfig-ws
+        steps:
+          - name: create-kubeconfig
+            image: registry.redhat.io/openshift4/ose-cli:latest
+            script: |
+              #!/bin/bash
+              set -e
+              KUBECONFIG_PATH="$(workspaces.kubeconfig-ws.path)/kubeconfig"
+              TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              CA_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              cat > "$KUBECONFIG_PATH" <<EOF
+              apiVersion: v1
+              kind: Config
+              clusters:
+              - cluster:
+                  certificate-authority: ${CA_CERT}
+                  server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}
+                name: test-cluster
+              contexts:
+              - context:
+                  cluster: test-cluster
+                  user: test-user
+                name: test-context
+              current-context: test-context
+              users:
+              - name: test-user
+                user:
+                  token: ${TOKEN}
+              EOF
+              echo "Created in-cluster kubeconfig"
+      workspaces:
+        - name: kubeconfig-ws
+          workspace: tests-workspace
+
+    - name: create-test-namespace
+      runAfter:
+        - setup-kubeconfig
+      taskSpec:
+        results:
+          - name: namespace-name
+        steps:
+          - name: create-namespace
+            image: registry.redhat.io/openshift4/ose-cli:latest
+            script: |
+              #!/bin/bash
+              set -e
+              NS_NAME="mcp-eval-wait-test-$(date +%s)"
+              echo "Creating test namespace: ${NS_NAME}"
+              kubectl create namespace "${NS_NAME}"
+              echo -n "${NS_NAME}" > $(results.namespace-name.path)
+
+    - name: deploy-test-app
+      runAfter:
+        - create-test-namespace
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+      taskSpec:
+        params:
+          - name: namespace-name
+            type: string
+        steps:
+          - name: create-deployment
+            image: registry.redhat.io/openshift4/ose-cli:latest
+            env:
+              - name: NAMESPACE
+                value: $(params.namespace-name)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "Creating test deployment in ${NAMESPACE}"
+              cat <<EOF | kubectl apply -n "${NAMESPACE}" -f -
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: test-app
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: test
+                template:
+                  metadata:
+                    labels:
+                      app: test
+                  spec:
+                    containers:
+                    - name: test
+                      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+                      command: ["sleep", "3600"]
+                      resources:
+                        requests:
+                          memory: "32Mi"
+                          cpu: "50m"
+                        limits:
+                          memory: "64Mi"
+                          cpu: "100m"
+              EOF
+              echo "Deployment created"
+
+    - name: run-wait-ready
+      runAfter:
+        - deploy-test-app
+      taskRef:
+        name: wait-ready
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+        - name: readiness-timeout
+          value: "120"
+      workspaces:
+        - name: target-kubeconfig
+          workspace: tests-workspace
+
+    - name: verify-ready
+      runAfter:
+        - run-wait-ready
+      params:
+        - name: ready-status
+          value: $(tasks.run-wait-ready.results.ready-status)
+      taskSpec:
+        params:
+          - name: ready-status
+            type: string
+        steps:
+          - name: check-status
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            env:
+              - name: READY_STATUS
+                value: $(params.ready-status)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "ready-status=${READY_STATUS}"
+              if [ "$READY_STATUS" != "ready" ]; then
+                echo "FAIL: expected ready-status=ready, got '${READY_STATUS}'"
+                exit 1
+              fi
+              echo "wait-ready successfully waited for deployment"
