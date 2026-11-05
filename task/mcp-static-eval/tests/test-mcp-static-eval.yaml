@@ -1,0 +1,80 @@
+# Tests with mode="disabled" and a minimal clean git repo. When mode is
+# disabled, the gate should pass even though scans run, with
+# static-eval-passed=true. This verifies the mode enforcement logic.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-mcp-static-eval
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: setup-test-repo
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: create-minimal-repo
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            script: |
+              #!/bin/bash
+              set -e
+              microdnf install -y git --nodocs 2>/dev/null
+              mkdir -p "$(workspaces.source.path)/mcp-server-repo"
+              cd "$(workspaces.source.path)/mcp-server-repo"
+              git init
+              git config user.email "test@example.com"
+              git config user.name "Test User"
+              echo "# Test MCP Server" > README.md
+              git add README.md
+              git commit -m "Initial commit"
+              echo "Created minimal test repo"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+
+    - name: run-mcp-static-eval
+      runAfter:
+        - setup-test-repo
+      taskRef:
+        name: mcp-static-eval
+      params:
+        - name: source-subdir
+          value: "mcp-server-repo"
+        - name: mode
+          value: "disabled"
+        - name: allowed-licenses
+          value: ""
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+
+    - name: verify-disabled-mode
+      runAfter:
+        - run-mcp-static-eval
+      params:
+        - name: static-eval-passed
+          value: $(tasks.run-mcp-static-eval.results.static-eval-passed)
+      taskSpec:
+        params:
+          - name: static-eval-passed
+            type: string
+        steps:
+          - name: check-passed
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            env:
+              - name: STATIC_EVAL_PASSED
+                value: $(params.static-eval-passed)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "static-eval-passed=${STATIC_EVAL_PASSED}"
+              if [ "$STATIC_EVAL_PASSED" != "true" ]; then
+                echo "FAIL: expected static-eval-passed=true when mode=disabled, got '${STATIC_EVAL_PASSED}'"
+                exit 1
+              fi
+              echo "mcp-static-eval correctly passed when mode=disabled"
+      workspaces:
+        - name: source
+          workspace: tests-workspace

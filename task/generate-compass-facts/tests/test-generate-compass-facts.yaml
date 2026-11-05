@@ -1,0 +1,91 @@
+# Tests fact generation with a minimal valid phase summary. Creates a
+# simple conformance summary file and verifies that fact files are generated.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-generate-compass-facts
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: setup-test-data
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: create-summary
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            script: |
+              #!/bin/bash
+              set -e
+              mkdir -p "$(workspaces.source.path)/reports"
+              cat > "$(workspaces.source.path)/reports/conformance-summary.json" <<'EOF'
+              {
+                "phase": "conformance",
+                "outcome": "pass",
+                "checks": [
+                  {
+                    "check_id": "protocol-conformance",
+                    "outcome": "pass",
+                    "details": "MCP protocol compliant"
+                  }
+                ]
+              }
+              EOF
+              echo "Created test summary file"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+
+    - name: run-generate-compass-facts
+      runAfter:
+        - setup-test-data
+      taskRef:
+        name: generate-compass-facts
+      params:
+        - name: summary-dir
+          value: "reports"
+        - name: facts-dir
+          value: "facts"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+
+    - name: verify-facts
+      runAfter:
+        - run-generate-compass-facts
+      params:
+        - name: facts-dir
+          value: $(tasks.run-generate-compass-facts.results.facts-dir)
+      taskSpec:
+        params:
+          - name: facts-dir
+            type: string
+        workspaces:
+          - name: source
+        steps:
+          - name: check-facts
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            env:
+              - name: FACTS_DIR
+                value: $(params.facts-dir)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "Checking facts directory: ${FACTS_DIR}"
+              FULL_PATH="$(workspaces.source.path)/${FACTS_DIR}"
+              if [ ! -d "$FULL_PATH" ]; then
+                echo "FAIL: facts directory not created at $FULL_PATH"
+                exit 1
+              fi
+              FACT_COUNT=$(find "$FULL_PATH" -name "*.json" -type f | wc -l)
+              echo "Found $FACT_COUNT fact file(s)"
+              if [ "$FACT_COUNT" -eq 0 ]; then
+                echo "FAIL: no fact files generated"
+                exit 1
+              fi
+              echo "generate-compass-facts successfully generated fact files"
+      workspaces:
+        - name: source
+          workspace: tests-workspace

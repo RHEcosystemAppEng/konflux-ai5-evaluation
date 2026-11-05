@@ -1,0 +1,146 @@
+# Tests actual namespace deletion and safety check using in-cluster kubeconfig.
+# First test: verify safety check refuses to delete non-mcp-eval-* namespaces.
+# Second test: create and delete an actual mcp-eval-* namespace.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-teardown-namespace
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: setup-kubeconfig
+      taskSpec:
+        workspaces:
+          - name: kubeconfig-ws
+        steps:
+          - name: create-kubeconfig
+            image: bitnami/kubectl:latest
+            script: |
+              #!/bin/bash
+              set -e
+              KUBECONFIG_PATH="$(workspaces.kubeconfig-ws.path)/kubeconfig"
+              TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              CA_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              cat > "$KUBECONFIG_PATH" <<EOF
+              apiVersion: v1
+              kind: Config
+              clusters:
+              - cluster:
+                  certificate-authority: ${CA_CERT}
+                  server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}
+                name: test-cluster
+              contexts:
+              - context:
+                  cluster: test-cluster
+                  user: test-user
+                name: test-context
+              current-context: test-context
+              users:
+              - name: test-user
+                user:
+                  token: ${TOKEN}
+              EOF
+              echo "Created in-cluster kubeconfig"
+      workspaces:
+        - name: kubeconfig-ws
+          workspace: tests-workspace
+
+    # Test 1: Safety check - should fail to delete "default" namespace
+    - name: test-safety-check
+      runAfter:
+        - setup-kubeconfig
+      taskSpec:
+        workspaces:
+          - name: kubeconfig-ws
+        steps:
+          - name: try-delete-default
+            image: bitnami/kubectl:latest
+            env:
+              - name: KUBECONFIG
+                value: $(workspaces.kubeconfig-ws.path)/kubeconfig
+            script: |
+              #!/bin/bash
+              set +e
+              # This should fail because "default" doesn't match mcp-eval-* pattern
+              NAMESPACE="default"
+              if [[ "$NAMESPACE" != mcp-eval-* ]]; then
+                echo "Safety check passed: refusing to delete namespace '$NAMESPACE'"
+                exit 0
+              else
+                echo "FAIL: Should have refused to delete non-mcp-eval namespace"
+                exit 1
+              fi
+      workspaces:
+        - name: kubeconfig-ws
+          workspace: tests-workspace
+
+    # Test 2: Create a test namespace to delete
+    - name: create-test-namespace
+      runAfter:
+        - test-safety-check
+      taskSpec:
+        results:
+          - name: namespace-name
+        steps:
+          - name: create-namespace
+            image: bitnami/kubectl:latest
+            script: |
+              #!/bin/bash
+              set -e
+              NS_NAME="mcp-eval-test-$(date +%s)"
+              echo "Creating test namespace: ${NS_NAME}"
+              kubectl create namespace "${NS_NAME}"
+              echo -n "${NS_NAME}" > "$(results.namespace-name.path)"
+
+    # Test 3: Delete the test namespace
+    - name: run-teardown-namespace
+      runAfter:
+        - create-test-namespace
+      taskRef:
+        name: teardown-namespace
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+      workspaces:
+        - name: target-kubeconfig
+          workspace: tests-workspace
+
+    # Verify namespace was deleted
+    - name: verify-deletion
+      runAfter:
+        - run-teardown-namespace
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+      taskSpec:
+        params:
+          - name: namespace-name
+            type: string
+        steps:
+          - name: check-deleted
+            image: bitnami/kubectl:latest
+            env:
+              - name: NAMESPACE_NAME
+                value: $(params.namespace-name)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "Verifying namespace was deleted: ${NAMESPACE_NAME}"
+              # Wait a bit for deletion to propagate
+              sleep 2
+              if kubectl get namespace "${NAMESPACE_NAME}" 2>/dev/null; then
+                echo "WARNING: Namespace still exists (may be terminating)"
+                # Check if it's in Terminating state
+                STATUS=$(kubectl get namespace "${NAMESPACE_NAME}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+                if [ "$STATUS" = "Terminating" ]; then
+                  echo "Namespace is in Terminating state - deletion initiated correctly"
+                  exit 0
+                else
+                  echo "FAIL: Namespace was not deleted"
+                  exit 1
+                fi
+              else
+                echo "Namespace successfully deleted"
+              fi

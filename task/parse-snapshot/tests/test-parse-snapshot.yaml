@@ -1,0 +1,92 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-parse-snapshot
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script (unused by this test).
+  tasks:
+    - name: run-parse-snapshot
+      taskRef:
+        name: parse-snapshot
+      params:
+        - name: SNAPSHOT
+          value: |
+            {
+              "components": [
+                {
+                  "name": "test-component",
+                  "containerImage": "quay.io/test/image@sha256:abc123",
+                  "source": {
+                    "git": {
+                      "url": "https://github.com/test/repo.git",
+                      "revision": "deadbeef1234567890"
+                    }
+                  }
+                }
+              ]
+            }
+        - name: component-name
+          value: ""
+
+    - name: verify-results
+      runAfter:
+        - run-parse-snapshot
+      params:
+        - name: component-image
+          value: $(tasks.run-parse-snapshot.results.component-image)
+        - name: git-url
+          value: $(tasks.run-parse-snapshot.results.git-url)
+        - name: git-revision
+          value: $(tasks.run-parse-snapshot.results.git-revision)
+        - name: component-name
+          value: $(tasks.run-parse-snapshot.results.component-name)
+      taskSpec:
+        params:
+          - name: component-image
+            type: string
+          - name: git-url
+            type: string
+          - name: git-revision
+            type: string
+          - name: component-name
+            type: string
+        steps:
+          - name: verify
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            env:
+              - name: COMPONENT_IMAGE
+                value: $(params.component-image)
+              - name: GIT_URL
+                value: $(params.git-url)
+              - name: GIT_REVISION
+                value: $(params.git-revision)
+              - name: COMPONENT_NAME
+                value: $(params.component-name)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "Verifying parsed snapshot results..."
+              echo "component-image=${COMPONENT_IMAGE}"
+              echo "git-url=${GIT_URL}"
+              echo "git-revision=${GIT_REVISION}"
+              echo "component-name=${COMPONENT_NAME}"
+
+              if [ "$COMPONENT_IMAGE" != "quay.io/test/image@sha256:abc123" ]; then
+                echo "FAIL: component-image mismatch"
+                exit 1
+              fi
+              if [ "$GIT_URL" != "https://github.com/test/repo.git" ]; then
+                echo "FAIL: git-url mismatch"
+                exit 1
+              fi
+              if [ "$GIT_REVISION" != "deadbeef1234567890" ]; then
+                echo "FAIL: git-revision mismatch"
+                exit 1
+              fi
+              if [ "$COMPONENT_NAME" != "test-component" ]; then
+                echo "FAIL: component-name mismatch"
+                exit 1
+              fi
+              echo "All results verified successfully"
