@@ -1,6 +1,6 @@
 # aeh-skill-eval
 
-Version 3.0.0 evaluates an explicit array of skills through one installed
+Version 3.1.0 evaluates an explicit array of skills through one installed
 `abeval batch` invocation. The CLI runs the existing single-skill workflow in
 sequence; configured plugin trees, MCP fixtures, tiers, policy, reporting, and
 PostgreSQL/S3/Compass persistence are unchanged. Separate pipeline runs may run
@@ -61,7 +61,8 @@ newer is required; pin it by digest in consuming pipelines.
 | `database-secret` | `ab-eval-db-credentials` | Konflux Secret with database-url and optional database-tls-route-host. |
 | `s3-secret` | `minio-credentials` | Konflux Secret with endpoint-url, root-user, root-password, optional insecure-skip-tls-verify. |
 | `s3-bucket` | `ab-eval-reports` | S3 publication bucket. |
-| `compass-secret` | `compass-facts-api` | Konflux Secret containing token. |
+| `compass-secret` | `compass-facts-api` | Konflux Secret containing the Compass bearer token. |
+| `compass-token-key` | `token` | Key injected as `ABEVAL_COMPASS_TOKEN`; use `COMPASS_STAGE_TOKEN` with the pilot's existing Secret. |
 | `ca-bundle-configmap` | `trusted-ca-bundle` | Optional Konflux ConfigMap with trusted CA bundle at ca-bundle.crt. |
 | `otel-exporter-endpoint` | `Disabled` | Optional OTLP/gRPC collector endpoint. |
 | `command-timeout` | `7200` | Timeout in seconds for each external AEH command. |

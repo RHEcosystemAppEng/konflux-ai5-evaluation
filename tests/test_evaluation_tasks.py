@@ -15,6 +15,14 @@ STEPS = {s["name"]: s for s in TASK["steps"]}
 
 
 class TaskContracts(unittest.TestCase):
+    def test_compass_credential_key_is_selected_by_the_consumer(self):
+        params = {p["name"]: p for p in TASK["params"]}
+        env = {e["name"]: e for e in STEPS["evaluate"]["env"]}
+        self.assertEqual(params["compass-token-key"]["default"], "token")
+        reference = env["ABEVAL_COMPASS_TOKEN"]["valueFrom"]["secretKeyRef"]
+        self.assertEqual(reference["name"], "$(params.compass-secret)")
+        self.assertEqual(reference["key"], "$(params.compass-token-key)")
+
     def test_array_is_passed_as_arguments_without_shell_interpolation(self):
         for name in ("evaluate", "emit-results"):
             step = STEPS[name]

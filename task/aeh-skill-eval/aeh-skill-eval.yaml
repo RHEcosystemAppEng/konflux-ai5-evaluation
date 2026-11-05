@@ -5,7 +5,7 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: 3.0.0
+    app.kubernetes.io/version: 3.1.0
 spec:
   description: >-
     Evaluate changed skills sequentially through one abeval batch invocation.
@@ -136,8 +136,12 @@ spec:
       default: ab-eval-reports
     - name: compass-secret
       type: string
-      description: Konflux Secret containing token.
+      description: Konflux Secret containing the Compass bearer token.
       default: compass-facts-api
+    - name: compass-token-key
+      type: string
+      description: Key in compass-secret injected as ABEVAL_COMPASS_TOKEN.
+      default: token
     - name: ca-bundle-configmap
       type: string
       description: Optional Konflux ConfigMap with trusted CA bundle at ca-bundle.crt.
@@ -328,7 +332,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: $(params.compass-secret)
-              key: token
+              key: $(params.compass-token-key)
               optional: true
         - name: ABEVAL_COMMAND_TIMEOUT
           value: $(params.command-timeout)

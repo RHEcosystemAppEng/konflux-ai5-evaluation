@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.0
+
+- Add `compass-token-key`, defaulting to `token` for existing consumers.
+- Allow native Component builds to use the existing `COMPASS_STAGE_TOKEN` Secret
+  key for required Compass persistence without copying or replacing credentials.
+
 ## 3.0.0
 
 - Require an explicit evaluation image containing CLI 0.6.0 or newer.
