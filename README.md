@@ -113,3 +113,11 @@ Kubernetes cluster with Konflux's Tekton bits installed and `tkn` -- see
 [SHARED-CI.md](SHARED-CI.md#task-validation-and-integration-tests). The
 `run-task-tests` GitHub Actions workflow runs these automatically on every
 PR once this repo has a GitHub remote.
+
+## Native plugin publication evidence
+
+The per-plugin build uses `prepare-plugin-oci-ta` 1.1.0, the existing
+`aeh-skill-eval` task, [`verify-plugin-evidence`](task/verify-plugin-evidence/README.md)
+and [`collect-plugin-context`](task/collect-plugin-context/README.md).
+These produce facts for Chains; official EC policies make market decisions.
+Existing fanout tasks remain supported for their other consumers.

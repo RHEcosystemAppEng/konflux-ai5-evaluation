@@ -3,74 +3,83 @@ kind: Task
 metadata:
   name: prepare-plugin-oci-ta
   labels:
-    app.kubernetes.io/version: 1.0.1
+    app.kubernetes.io/version: 1.1.0
   annotations:
     tekton.dev/tags: konflux, trusted-artifacts
 spec:
   description: Package one plugin from trusted source and return the prepared source as a trusted artifact.
   params:
-    - name: SOURCE_ARTIFACT
-      type: string
-    - name: tools-image
-      type: string
-      description: Approved digest-pinned plugin-pipeline component tools image.
-    - name: plugin-id
-      type: string
-    - name: revision
-      type: string
-    - name: source-url
-      type: string
-    - name: ociStorage
-      type: string
-    - name: ociArtifactExpiresAfter
-      type: string
-      default: 7d
+  - name: SOURCE_ARTIFACT
+    type: string
+  - name: tools-image
+    type: string
+    description: Approved digest-pinned plugin-pipeline component tools image.
+  - name: plugin-id
+    type: string
+  - name: revision
+    type: string
+  - name: source-url
+    type: string
+  - name: ociStorage
+    type: string
+  - name: ociArtifactExpiresAfter
+    type: string
+    default: 7d
   results:
-    - name: SOURCE_ARTIFACT
-      type: string
-    - name: SKILLS
-      type: array
-      description: Every skill contained in this plugin, in stable order.
+  - name: SOURCE_ARTIFACT
+    type: string
+  - name: SKILLS
+    type: array
+    description: Every skill contained in this plugin, in stable order.
+  - name: PLUGIN_PACKAGE
+    type: string
+    description: Canonical complete package manifest consumed by native EC policies.
   volumes:
-    - name: workdir
-      emptyDir: {}
+  - name: workdir
+    emptyDir: {}
   stepTemplate:
     securityContext:
       runAsUser: 1001
       runAsNonRoot: true
     env:
-      - name: HOME
-        value: /tekton/home
+    - name: HOME
+      value: /tekton/home
     volumeMounts:
-      - name: workdir
-        mountPath: /var/workdir
+    - name: workdir
+      mountPath: /var/workdir
   steps:
-    - name: use-trusted-artifact
-      image: quay.io/konflux-ci/build-trusted-artifacts@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
-      args: [use, '$(params.SOURCE_ARTIFACT)=/var/workdir/source']
-    - name: package
-      image: $(params.tools-image)
-      command: [python, -m, src.component, package]
-      args:
-        - --source
-        - /var/workdir/source
-        - --plugin
-        - $(params.plugin-id)
-        - --revision
-        - $(params.revision)
-        - --source-url
-        - $(params.source-url)
-        - --output
-        - /var/workdir/source/.konflux/package
-        - --results-dir
-        - /tekton/results
-    - name: create-trusted-artifact
-      image: quay.io/konflux-ci/build-trusted-artifacts@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
-      env:
-        - name: IMAGE_EXPIRES_AFTER
-          value: $(params.ociArtifactExpiresAfter)
-      args:
-        - create
-        - --store
-        - $(params.ociStorage)
-        - $(results.SOURCE_ARTIFACT.path)=/var/workdir/source
+  - name: use-trusted-artifact
+    image: quay.io/konflux-ci/build-trusted-artifacts@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
+    args:
+    - use
+    - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+  - name: package
+    image: $(params.tools-image)
+    command:
+    - python
+    - -m
+    - src.component
+    - package
+    args:
+    - --source
+    - /var/workdir/source
+    - --plugin
+    - $(params.plugin-id)
+    - --revision
+    - $(params.revision)
+    - --source-url
+    - $(params.source-url)
+    - --output
+    - /var/workdir/source/.konflux/package
+    - --results-dir
+    - /tekton/results
+  - name: create-trusted-artifact
+    image: quay.io/konflux-ci/build-trusted-artifacts@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
+    env:
+    - name: IMAGE_EXPIRES_AFTER
+      value: $(params.ociArtifactExpiresAfter)
+    args:
+    - create
+    - --store
+    - $(params.ociStorage)
+    - $(results.SOURCE_ARTIFACT.path)=/var/workdir/source

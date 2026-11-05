@@ -16,3 +16,7 @@ All steps run as UID 1001 with `HOME=/tekton/home`. Restoring and packaging
 as the same non-root user keeps the extracted source writable without changing
 source permissions or granting additional privileges. The TaskRun's volume
 group must allow access to its emptyDir, as provided by the tenant's SCC.
+
+Version 1.1.0 also emits the complete canonical manifest as `PLUGIN_PACKAGE`.
+Official EC policies compare its inventory with the signed evaluation and
+verification results. The approved tools runtime must support that result.

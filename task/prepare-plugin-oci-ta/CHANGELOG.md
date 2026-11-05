@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+- Emit the complete canonical `PLUGIN_PACKAGE` manifest for native EC policies.
+- Preserve trusted source transport, deterministic packaging and full `SKILLS` inventory.
+
 ## 1.0.1
 
 - Restore, package and archive source as UID 1001, matching the tools image.
