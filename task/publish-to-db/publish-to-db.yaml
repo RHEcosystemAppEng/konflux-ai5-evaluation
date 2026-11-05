@@ -1,0 +1,128 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: publish-to-db
+  labels:
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/name: abevalflow
+    app.kubernetes.io/component: konflux
+spec:
+  description: Store MCP phase summaries in the evaluation Postgres database.
+  params:
+    - name: mcp-eval-image
+      type: string
+      description: MCP evaluation image containing the database writer.
+    - name: summary-dir
+      type: string
+      default: reports
+      description: Workspace-relative directory containing phase summaries.
+    - name: component-name
+      type: string
+      description: MCP component name from the Konflux Snapshot.
+    - name: git-url
+      type: string
+      description: MCP component source repository URL.
+    - name: commit-sha
+      type: string
+      description: MCP component source commit SHA.
+    - name: pipeline-run-id
+      type: string
+      description: Name of the evaluation PipelineRun.
+    - name: database-secret
+      type: string
+      description: Secret with database-url and optional database-tls-route-host.
+  workspaces:
+    - name: source
+      description: Workspace containing the phase summaries.
+  steps:
+    - name: store
+      image: $(params.mcp-eval-image)
+      imagePullPolicy: Always
+      env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: $(params.database-secret)
+              key: database-url
+        - name: DB_TLS_ROUTE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: $(params.database-secret)
+              key: database-tls-route-host
+              optional: true
+        - name: SUMMARY_DIR
+          value: $(params.summary-dir)
+        - name: COMPONENT_NAME
+          value: $(params.component-name)
+        - name: GIT_URL
+          value: $(params.git-url)
+        - name: COMMIT_SHA
+          value: $(params.commit-sha)
+        - name: PIPELINE_RUN_ID
+          value: $(params.pipeline-run-id)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        if [ -n "${DB_TLS_ROUTE_HOST:-}" ]; then
+          python3 - "$DB_TLS_ROUTE_HOST" <<'PY' &
+        import socket
+        import ssl
+        import sys
+        import threading
+
+        route_host = sys.argv[1]
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        def relay(source, destination):
+            try:
+                while data := source.recv(65536):
+                    destination.sendall(data)
+            except OSError:
+                pass
+            finally:
+                try:
+                    destination.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+
+        def handle(connection):
+            try:
+                upstream = socket.create_connection((route_host, 443))
+                upstream = context.wrap_socket(upstream, server_hostname=route_host)
+            except Exception as error:
+                print(f"DB tunnel connection failed: {error}", flush=True)
+                connection.close()
+                return
+            first = threading.Thread(target=relay, args=(connection, upstream), daemon=True)
+            second = threading.Thread(target=relay, args=(upstream, connection), daemon=True)
+            first.start()
+            second.start()
+            first.join()
+            second.join()
+            connection.close()
+            upstream.close()
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 5432))
+        listener.listen(20)
+        while True:
+            connection, _ = listener.accept()
+            threading.Thread(target=handle, args=(connection,), daemon=True).start()
+        PY
+          for _ in $(seq 1 20); do
+            python3 -c "import socket; socket.create_connection(('127.0.0.1', 5432), 1).close()" \
+              2>/dev/null && break
+            sleep 0.5
+          done
+        fi
+
+        python3 /opt/publish_to_db/scripts/store_mcp_results.py \
+          --report-dir "$(workspaces.source.path)/$SUMMARY_DIR" \
+          --component-name "$COMPONENT_NAME" \
+          --git-url "$GIT_URL" \
+          --commit-sha "$COMMIT_SHA" \
+          --pipeline-run-id "$PIPELINE_RUN_ID"
