@@ -20,11 +20,21 @@ to.
 | [check-pr-label](task/check-pr-label/README.md) | Fail-closed check of whether the merged MR for a commit carries an opt-in label (GitLab). | 0.1.0 |
 | [discover-changed-skills](task/discover-changed-skills/README.md) | Diffs a catalog's registered SHAs against the current SHA to find what changed (GitLab). | 0.1.0 |
 | [update-registered-shas](task/update-registered-shas/README.md) | Bumps a catalog's registered SHAs and pushes the bookkeeping commit (GitLab). | 0.1.0 |
+| [parse-snapshot](task/parse-snapshot/README.md) | Parses a Konflux Snapshot JSON to extract component image, git URL, revision, and name. | 0.1.0 |
+| [create-namespace](task/create-namespace/README.md) | Creates an ephemeral namespace on a remote cluster for MCP server evaluation. | 0.1.0 |
+| [deploy-mcp](task/deploy-mcp/README.md) | Deploys an MCP server into the ephemeral namespace via Helm chart. | 0.1.0 |
+| [wait-ready](task/wait-ready/README.md) | Waits for all Deployments/StatefulSets in the namespace to complete rollout. | 0.1.0 |
+| [mcp-static-eval](task/mcp-static-eval/README.md) | Static checks (secrets, code execution, license) against MCP server source. | 0.1.0 |
+| [mcp-conformance-eval](task/mcp-conformance-eval/README.md) | Deterministic conformance probes against a deployed MCP server (no LLM). | 0.1.0 |
+| [mcp-behavioral-eval](task/mcp-behavioral-eval/README.md) | LLM-driven behavioral evaluation using mcpchecker against a deployed MCP server. | 0.1.0 |
+| [generate-compass-facts](task/generate-compass-facts/README.md) | Generates Compass SoundCheck fact payloads from MCP evaluation summaries. | 0.1.0 |
+| [publish-to-compass](task/publish-to-compass/README.md) | Publishes generated fact payloads to Compass SoundCheck. | 0.1.0 |
+| [teardown-namespace](task/teardown-namespace/README.md) | Deletes the ephemeral evaluation namespace (`finally` block). | 0.1.0 |
 
 Every task's own `README.md` documents its full Parameters/Results/
 Workspaces/**Secrets** tables and a copy-pasteable usage snippet. See
 [docs/examples/skills-evaluation-usage.md](docs/examples/skills-evaluation-usage.md)
-for how all five compose together in a real pipeline (the exact wiring
+for how the tasks compose together in a real pipeline (the exact wiring
 agentic-plugins itself uses).
 
 ## Reusability scope
@@ -45,7 +55,9 @@ agentic-plugins itself uses).
   `README.md` -- these three tasks implement a *bookkeeping pattern*, not a
   fully self-contained integration.
 
-No task in this repo uses a ConfigMap.
+`publish-to-compass` creates a temporary ConfigMap on the target cluster to
+mount generated fact files into its publishing Job. The task deletes that
+ConfigMap after the Job finishes.
 
 ## Getting bundle images
 
@@ -57,7 +69,7 @@ target), to:
 quay.io/ecosystem-appeng/konflux-skill-evaluation/<task-name>:<version>
 ```
 
-All five 0.1.0 bundles are published. Pin the digest `make bundles` prints
+All 0.1.0 bundles are published. Pin the digest `make bundles` prints
 (or re-resolve it with `skopeo inspect docker://quay.io/ecosystem-appeng/konflux-skill-evaluation/<task-name>:0.1.0`)
 in your pipeline's `taskRef.params[bundle]` -- see each task's own
 `README.md` for a ready-to-use, already-pinned snippet, and
