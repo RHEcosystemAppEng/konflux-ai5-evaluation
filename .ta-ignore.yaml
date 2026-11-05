@@ -1,4 +1,41 @@
-# The evaluator consumes source-artifact as trusted input. Its workspace is
-# scratch storage for sequential CLI evidence, not an artifact handoff.
+# Trusted Artifacts (TA) exemptions.
+#
+# The `missing-ta-tasks` check (see SHARED-CI.md) requires every Task that
+# declares a non-ignored workspace to have a `${task_name}-oci-ta` sibling
+# variant. The three Tasks below are deliberately exempt: their `source`
+# workspace is not used to pass build artifacts between sequential pipeline
+# Tasks (the use case Trusted Artifacts/ADR36 targets) -- it is either a
+# Matrix-shared scratch directory or a mutable git checkout that gets
+# pushed back to, neither of which maps onto the OCI-Trusted-Artifact
+# model without changing the Task's actual behavior.
+#
+# - task/aeh-skill-eval/aeh-skill-eval.yaml: `source` is a scratch PVC
+#   shared by every concurrent Matrix leg (one leg per catalog item, see
+#   the Task's own CONCURRENCY note); each leg computes its own
+#   `legs/<slug>` subdirectory under it. The Task already consumes its
+#   caller's actual trusted Source Artifact via the `source-artifact` param
+#   + `use-trusted-artifact` step -- the workspace itself carries no data
+#   between pipeline Tasks.
+#
+# MCP evaluation tasks:
+#   These Tasks form the MCP server evaluation pipeline. Their
+#   workspaces serve two purposes that do not map onto the OCI-Trusted-
+#   Artifact model:
+#   - `target-kubeconfig`: a read-only credential mount (OCP Secret) for
+#     reaching a remote target cluster -- not a build artifact.
+#   - `source`: an inter-step scratch area for evaluation results, reports,
+#     and generated Job manifests written during the pipeline run. No
+#     source-code build artifact is passed between pipeline Tasks through
+#     this workspace.
 paths:
   - task/aeh-skill-eval/aeh-skill-eval.yaml
+  - task/create-namespace/create-namespace.yaml
+  - task/deploy-mcp/deploy-mcp.yaml
+  - task/generate-compass-facts/generate-compass-facts.yaml
+  - task/mcp-behavioral-eval/mcp-behavioral-eval.yaml
+  - task/mcp-conformance-eval/mcp-conformance-eval.yaml
+  - task/mcp-static-eval/mcp-static-eval.yaml
+  - task/parse-snapshot/parse-snapshot.yaml
+  - task/publish-to-compass/publish-to-compass.yaml
+  - task/teardown-namespace/teardown-namespace.yaml
+  - task/wait-ready/wait-ready.yaml

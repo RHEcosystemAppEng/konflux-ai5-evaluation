@@ -1,0 +1,66 @@
+entity_namespace: "component:ai5-marketplace"
+
+phases:
+  static-eval:
+    source: pipeline
+    checks:
+      mcp-secrets:
+        name: Secrets Management
+        fact_ref: "abevalflow:default/mcp_secrets"
+      mcp-no-user-code:
+        name: No User-Code Execution
+        fact_ref: "abevalflow:default/mcp_no_user_code"
+      mcp-license:
+        name: License Compliance
+        fact_ref: "abevalflow:default/mcp_license"
+
+  conformance-eval:
+    source: probe
+    checks:
+      http-support:
+        name: HTTP Support
+        fact_ref: "abevalflow:default/mcp_http_support"
+      protocol-compliance:
+        name: Protocol Compliance
+        fact_ref: "abevalflow:default/mcp_protocol_compliance"
+      schema-conformance:
+        name: Schema Conformance
+        fact_ref: "abevalflow:default/mcp_schema_conformance"
+      tool-annotations:
+        name: Tool Annotations
+        fact_ref: "abevalflow:default/mcp_tool_annotations"
+      rate-limiting:
+        name: Rate Limiting
+        fact_ref: "abevalflow:default/mcp_rate_limiting"
+      response-size-limit:
+        name: Response Size Limit
+        fact_ref: "abevalflow:default/mcp_response_size_limit"
+      mandatory-timeouts:
+        name: Mandatory Timeouts
+        fact_ref: "abevalflow:default/mcp_mandatory_timeouts"
+      openapi-conformance:
+        name: OpenAPI Conformance
+        fact_ref: "abevalflow:default/mcp_openapi_conformance"
+      tool-name-rules:
+        name: Tool-Name Rules
+        fact_ref: "abevalflow:default/mcp_tool_name_rules"
+        source: compass
+        consumed: true
+      oauth-catalog-match:
+        name: OAuth Matches Catalog
+        fact_ref: "abevalflow:default/mcp_oauth_catalog_match"
+        source: compass
+        consumed: true
+
+  behavioral-eval:
+    source: pipeline
+    checks:
+      tool-correctness:
+        name: Tool Correctness
+        fact_ref: "abevalflow:default/mcp_tool_correctness"
+      edge-case-handling:
+        name: Edge Case Handling
+        fact_ref: "abevalflow:default/mcp_edge_case_handling"
+      sensitive-data-redaction:
+        name: Sensitive Data Redaction
+        fact_ref: "abevalflow:default/mcp_sensitive_data_redaction"
