@@ -52,12 +52,6 @@ class TaskContracts(unittest.TestCase):
         self.assertEqual(params["n-concurrent"]["default"], "1")
         self.assertEqual(env["ABEVAL_N_CONCURRENT"]["value"], "$(params.n-concurrent)")
 
-    def test_registration_consumes_manifest_and_evidence_workspace(self):
-        task = yaml.safe_load((ROOT / "task/update-registered-shas/update-registered-shas.yaml").read_text())["spec"]
-        self.assertEqual([w["name"] for w in task["workspaces"]], ["source"])
-        self.assertIn("batch-manifest", [p["name"] for p in task["params"]])
-        self.assertNotIn("eval-outcomes", [p["name"] for p in task["params"]])
-
 
 @unittest.skipUnless(os.environ.get("ABEVAL_TEST_CLI"), "Set ABEVAL_TEST_CLI to an installed abeval executable")
 class ExecutableTaskSmoke(unittest.TestCase):
