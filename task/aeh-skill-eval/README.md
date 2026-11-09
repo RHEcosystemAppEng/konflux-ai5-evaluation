@@ -14,7 +14,7 @@ Matrix source array.
 
 This Task is already fully generic -- it needs only its own image, params,
 and Secrets, with no coupling to any particular source repository (unlike
-`check-pr-label`/`discover-changed-skills`/`update-registered-shas`, which
+`discover-changed-skills`/`update-registered-shas`, which
 are GitLab-project-specific). It consumes its caller's trusted Source
 Artifact via `source-artifact`, never performs its own `git clone`.
 
@@ -115,7 +115,7 @@ No ConfigMaps are used by this Task.
   - name: source-artifact
     value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
   - name: should-evaluate
-    value: $(tasks.check-pr-label.results.should-evaluate)
+    value: $(tasks.check-label.results.has-label)
   - name: changed-skills
     value: $(tasks.discover-changed-skills.results.changed-skills[*])
   - name: enable-persistence

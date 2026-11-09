@@ -7,18 +7,15 @@ itself uses in its `.tekton/skills-evaluation-push.yaml` /
 `taskRef.resolver: bundles` instead of a `git` resolver pinned at this
 repo's own revision.
 
-If you're building a different catalog-evaluation pipeline, the only parts
-you'll need to change are the five `git-*`/`gitlab-*` params on
-`check-pr-label`/`discover-changed-skills`/`update-registered-shas` (see
-each task's own `README.md`), and the `scripts/*.py` files those three
-tasks expect to find in *your* repository (not bundled in the Task image --
-see [Reusability scope](../../README.md#reusability-scope)).
+For another catalog, configure `check-label` with its repository URL and
+token Secret. Configure the GitLab repository and script parameters on
+`discover-changed-skills` and `update-registered-shas` for that catalog.
 
 ## The shape of the pipeline
 
 ```mermaid
 flowchart TD
-    clone[clone-repository] --> checkLabel[check-pr-label]
+    clone[clone-repository] --> checkLabel[check-label]
     checkLabel --> discover[discover-changed-skills]
     discover --> evalMatrix["evaluate-skill (Matrix over aeh-skill-eval,\none leg per changed-skills entry)"]
     evalMatrix --> gateTierA[aggregate-fanout-result\nTEST_OUTPUT_TIER_A, hard gate]
@@ -26,11 +23,32 @@ flowchart TD
     updateShas --> emitTierB[aggregate-fanout-result\nTEST_OUTPUT_TIER_B, informational]
 ```
 
-`check-pr-label` is only needed on a push-to-main pipeline (it gates the
+`check-label` is only needed on a push-to-main pipeline (it gates the
 LLM-cost Tier B chain behind a merged MR's label); a pull-request pipeline
 can skip straight to `discover-changed-skills` and pass `should-evaluate:
 "false"` as a static value into the Matrix, so only the always-on Tier A
 checks run pre-merge.
+
+Configure the push pipeline's label gate explicitly. Publish the new
+bundle and pin its digest before switching the consuming pipeline.
+
+```yaml
+- name: check-label
+  runAfter: [clone-repository]
+  taskRef:
+    resolver: bundles
+    params:
+    - {name: name, value: check-label}
+    - {name: bundle, value: quay.io/ecosystem-appeng/konflux-skill-evaluation/check-label:0.1.0}
+    - {name: kind, value: task}
+  params:
+  - {name: git-url, value: https://gitlab.cee.redhat.com/ai5-marketplace/agentic-plugins}
+  - {name: git-revision, value: "$(params.revision)"}
+  - {name: target-label, value: evaluate}
+  - {name: pr-status-is, value: merged}
+  - {name: git-token-secret-name, value: agentic-plugins-gitlab-sa}
+  - {name: git-token-secret-key, value: password}
+```
 
 ## 1. Discover what changed
 
@@ -71,7 +89,7 @@ explicit values to point at your own repository instead.
   params:
   - {name: submission-revision, value: "$(params.revision)"}
   - {name: source-artifact, value: "$(tasks.clone-repository.results.SOURCE_ARTIFACT)"}
-  - {name: should-evaluate, value: "$(tasks.check-pr-label.results.should-evaluate)"}
+  - {name: should-evaluate, value: "$(tasks.check-label.results.has-label)"}
   - {name: changed-skills, value: $(tasks.discover-changed-skills.results.changed-skills[*])}
   - {name: enable-persistence, value: "true"}
   workspaces:
@@ -114,7 +132,7 @@ chain) only runs when `should-evaluate` AND that leg's own membership in
     - {name: kind, value: task}
   params:
   - {name: current-sha, value: "$(params.revision)"}
-  - {name: should-evaluate, value: "$(tasks.check-pr-label.results.should-evaluate)"}
+  - {name: should-evaluate, value: "$(tasks.check-label.results.has-label)"}
   - {name: changed-skills, value: $(tasks.discover-changed-skills.results.changed-skills[*])}
   - {name: eval-outcomes, value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_B[*])}
   workspaces:
@@ -130,7 +148,7 @@ chain) only runs when `should-evaluate` AND that leg's own membership in
     - {name: kind, value: task}
   params:
   - {name: SOURCE_ARTIFACT, value: "$(tasks.clone-repository.results.SOURCE_ARTIFACT)"}
-  - {name: should-evaluate, value: "$(tasks.check-pr-label.results.should-evaluate)"}
+  - {name: should-evaluate, value: "$(tasks.check-label.results.has-label)"}
   - {name: changed-skills, value: $(tasks.discover-changed-skills.results.changed-skills[*])}
   - {name: eval-outcomes, value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_B[*])}
   # fail-on-non-success left at its default "false" -- informational only

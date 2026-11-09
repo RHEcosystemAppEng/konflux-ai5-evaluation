@@ -1,0 +1,123 @@
+# TODO: Update ai5-marketplace/agentic-plugins/.tekton/skills-evaluation-push.yaml
+# to use this Task and pin its published bundle digest. Pass target-label=evaluate
+# and pr-status-is=merged; update runAfter and result references to check-label
+# and has-label, retaining the existing Git token Secret.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: check-label
+  labels:
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/name: abevalflow
+    app.kubernetes.io/component: konflux
+spec:
+  description: >-
+    Checks whether a target PR label is present on the pull/merge request
+    associated with a given git commit. Supports both GitHub and GitLab.
+    Derives the API endpoint from the git-url host. Returns "true" if the
+    label is found, "false" otherwise.
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL (e.g. https://github.com/owner/repo)
+    - name: git-revision
+      type: string
+      description: Git commit SHA to look up associated PRs/MRs for
+    - name: target-label
+      type: string
+      default: "evaluate"
+      description: PR/MR label name to check for
+    - name: pr-status-is
+      type: string
+      default: ""
+      description: Optional PR/MR status (open, merged, closed); empty means any status
+    - name: git-token-secret-name
+      type: string
+      default: "git-secret"
+      description: Name of the Secret containing the Git access token
+    - name: git-token-secret-key
+      type: string
+      default: "password"
+      description: Key within the Git token Secret
+  results:
+    - name: has-label
+      description: "'true' if target-label appears on the PR/MR, 'false' otherwise"
+  steps:
+    - name: check
+      image: registry.access.redhat.com/ubi9/python-311:latest
+      env:
+        - name: GIT_URL
+          value: $(params.git-url)
+        - name: REVISION
+          value: $(params.git-revision)
+        - name: TARGET_LABEL
+          value: $(params.target-label)
+        - name: PR_STATUS
+          value: $(params.pr-status-is)
+        - name: GIT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: $(params.git-token-secret-name)
+              key: $(params.git-token-secret-key)
+              optional: true
+        - name: RESULT_PATH
+          value: $(results.has-label.path)
+      script: |
+        #!/usr/bin/env python3
+        import json
+        import os
+        from pathlib import Path
+        import ssl
+        import sys
+        import urllib.parse
+        import urllib.request
+
+        status = os.environ["PR_STATUS"]
+        if status not in ("", "open", "merged", "closed"):
+            sys.exit(f"ERROR: Invalid PR status: {status}")
+
+        token = os.environ.get("GIT_TOKEN", "")
+        label = os.environ["TARGET_LABEL"]
+        result = False
+        if not token:
+            print("WARNING: GIT_TOKEN not available, returning false", file=sys.stderr)
+        else:
+            repository = urllib.parse.urlsplit(os.environ["GIT_URL"])
+            host = (repository.hostname or "").lower()
+            path = repository.path.rstrip("/").lstrip("/").removesuffix(".git")
+            revision = os.environ["REVISION"]
+            if "github" in host:
+                platform = "github"
+                api = "https://api.github.com" if host == "github.com" else f"{repository.scheme}://{repository.netloc}/api/v3"
+                url = f"{api}/repos/{path}/commits/{revision}/pulls"
+                headers = {"Accept": "application/vnd.github+json", "Authorization": f"token {token}"}
+            elif "gitlab" in host:
+                platform = "gitlab"
+                project = urllib.parse.quote(path, safe="")
+                url = f"{repository.scheme}://{repository.netloc}/api/v4/projects/{project}/repository/commits/{revision}/merge_requests"
+                headers = {"PRIVATE-TOKEN": token}
+            else:
+                sys.exit(f"ERROR: Unsupported Git platform: {host}")
+
+            try:
+                request = urllib.request.Request(url, headers=headers)
+                # Preserve the existing tasks' handling of internal Git certificates.
+                context = ssl._create_unverified_context()
+                with urllib.request.urlopen(request, context=context, timeout=30) as response:
+                    requests = json.loads(response.read())
+                for item in requests:
+                    if platform == "github":
+                        labels = [entry["name"] for entry in (item.get("labels") or [])]
+                        state = "merged" if item.get("merged_at") is not None else item.get("state")
+                    else:
+                        labels = item.get("labels") or []
+                        state = "open" if item.get("state") == "opened" else item.get("state")
+                    if label in labels and (not status or state == status):
+                        result = True
+                        break
+            except Exception as error:
+                print(f"WARNING: PR/MR lookup failed: {error}; returning false", file=sys.stderr)
+
+        value = "true" if result else "false"
+        Path(os.environ["RESULT_PATH"]).write_text(value)
+        print(f"has-label: {value}")
