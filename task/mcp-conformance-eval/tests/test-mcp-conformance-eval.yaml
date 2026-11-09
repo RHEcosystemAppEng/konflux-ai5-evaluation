@@ -1,0 +1,226 @@
+# Tests the conformance eval task by deploying a simple HTTP server and
+# verifying the probe Job runs. The probes will likely report not_evaluated
+# since it's not a real MCP server, but this tests Job creation, execution,
+# and result collection logic.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-mcp-conformance-eval
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: setup-kubeconfig
+      taskSpec:
+        workspaces:
+          - name: kubeconfig-ws
+        steps:
+          - name: create-kubeconfig
+            image: bitnami/kubectl:latest
+            script: |
+              #!/bin/bash
+              set -e
+              KUBECONFIG_PATH="$(workspaces.kubeconfig-ws.path)/kubeconfig"
+              TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              CA_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              cat > "$KUBECONFIG_PATH" <<EOF
+              apiVersion: v1
+              kind: Config
+              clusters:
+              - cluster:
+                  certificate-authority: ${CA_CERT}
+                  server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}
+                name: test-cluster
+              contexts:
+              - context:
+                  cluster: test-cluster
+                  user: test-user
+                name: test-context
+              current-context: test-context
+              users:
+              - name: test-user
+                user:
+                  token: ${TOKEN}
+              EOF
+              echo "Created in-cluster kubeconfig"
+      workspaces:
+        - name: kubeconfig-ws
+          workspace: tests-workspace
+
+    - name: create-test-namespace
+      runAfter:
+        - setup-kubeconfig
+      taskSpec:
+        results:
+          - name: namespace-name
+        steps:
+          - name: create-namespace
+            image: bitnami/kubectl:latest
+            script: |
+              #!/bin/bash
+              set -e
+              NS_NAME="mcp-eval-conf-test-$(date +%s)"
+              PIPELINE_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+
+              echo "Creating test namespace: ${NS_NAME}"
+              kubectl create namespace "${NS_NAME}"
+
+              # Grant appstudio-pipeline SA permissions in ephemeral namespace
+              # (matches production create-namespace task behavior)
+              kubectl apply -f - <<EOF
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: RoleBinding
+              metadata:
+                name: mcp-eval-ephemeral-access
+                namespace: ${NS_NAME}
+              roleRef:
+                apiGroup: rbac.authorization.k8s.io
+                kind: ClusterRole
+                name: mcp-eval-ephemeral-access
+              subjects:
+                - kind: ServiceAccount
+                  name: appstudio-pipeline
+                  namespace: ${PIPELINE_NS}
+              EOF
+
+              echo -n "${NS_NAME}" > "$(results.namespace-name.path)"
+
+    - name: deploy-mock-server
+      runAfter:
+        - create-test-namespace
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+      taskSpec:
+        params:
+          - name: namespace-name
+            type: string
+        steps:
+          - name: create-deployment
+            image: bitnami/kubectl:latest
+            env:
+              - name: NAMESPACE
+                value: $(params.namespace-name)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "Creating mock HTTP server in ${NAMESPACE}"
+              cat <<EOF | kubectl apply -n "${NAMESPACE}" -f -
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: mock-mcp-server
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: mock-mcp
+                template:
+                  metadata:
+                    labels:
+                      app: mock-mcp
+                  spec:
+                    containers:
+                    - name: http-server
+                      image: registry.access.redhat.com/ubi9/httpd-24:latest
+                      ports:
+                      - containerPort: 8080
+                      resources:
+                        requests:
+                          memory: "32Mi"
+                          cpu: "50m"
+                        limits:
+                          memory: "64Mi"
+                          cpu: "100m"
+              ---
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: mock-mcp-server
+              spec:
+                selector:
+                  app: mock-mcp
+                ports:
+                - protocol: TCP
+                  port: 8080
+                  targetPort: 8080
+              EOF
+
+              echo "Waiting for deployment to be ready..."
+              kubectl wait --for=condition=available --timeout=60s deployment/mock-mcp-server -n "${NAMESPACE}"
+              echo "Mock server ready"
+
+    - name: run-mcp-conformance-eval
+      runAfter:
+        - deploy-mock-server
+      taskRef:
+        name: mcp-conformance-eval
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+        - name: service-name
+          value: "mock-mcp-server"
+        - name: service-port
+          value: "8080"
+        - name: mode
+          value: "warn"
+        - name: timeout
+          value: "10"
+        - name: job-timeout
+          value: "120"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+        - name: target-kubeconfig
+          workspace: tests-workspace
+
+    - name: verify-probe-ran
+      runAfter:
+        - run-mcp-conformance-eval
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+        - name: report-path
+          value: $(tasks.run-mcp-conformance-eval.results.report-path)
+      taskSpec:
+        params:
+          - name: namespace-name
+            type: string
+          - name: report-path
+            type: string
+        workspaces:
+          - name: source
+        steps:
+          - name: check-results
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            env:
+              - name: NAMESPACE
+                value: $(params.namespace-name)
+              - name: REPORT_PATH
+                value: $(params.report-path)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "Namespace: ${NAMESPACE}"
+              echo "Report path: ${REPORT_PATH}"
+
+              # Check that report path was set
+              if [ -z "$REPORT_PATH" ]; then
+                echo "FAIL: report-path result is empty"
+                exit 1
+              fi
+
+              # Check if report file exists
+              FULL_PATH="$(workspaces.source.path)/${REPORT_PATH}"
+              if [ ! -f "$FULL_PATH" ]; then
+                echo "FAIL: Report file not found at $FULL_PATH"
+                exit 1
+              fi
+
+              echo "Conformance probe ran and generated report"
+              echo "Report contents:"
+              head -50 "$FULL_PATH"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
