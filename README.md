@@ -46,6 +46,7 @@ Mirrors must preserve the upstream merge commit SHA and target branch.
 | [mcp-behavioral-eval](task/mcp-behavioral-eval/README.md) | 0.1.0 | LLM-driven behavioral evaluation using mcpchecker against a deployed MCP server |
 | [generate-compass-facts](task/generate-compass-facts/README.md) | 0.1.0 | Generates Compass SoundCheck fact payloads from MCP evaluation summaries |
 | [publish-to-compass](task/publish-to-compass/README.md) | 0.1.0 | Publishes generated fact payloads to Compass SoundCheck |
+| [publish-to-db](task/publish-to-db/README.md) | 0.1.0 | Stores MCP evaluation results in PostgreSQL |
 | [teardown-namespace](task/teardown-namespace/README.md) | 0.1.0 | Deletes the ephemeral evaluation namespace (`finally` block) |
 
 Tier 1 is always selected. The label is not required for redhat-only. Missing
