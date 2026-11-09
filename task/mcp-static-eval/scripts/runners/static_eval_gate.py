@@ -84,16 +84,22 @@ def main() -> int:
         )
 
     overall_passed = all(r.passed for r in results)
+
+    # In disabled/warn modes, the task always passes even if gates failed.
+    # The summary 'passed' field becomes the Tekton result value.
+    mode_enum = GateMode(args.mode)
+    task_passed = overall_passed or mode_enum in (GateMode.WARN, GateMode.DISABLED)
+
     (args.reports_dir / SUMMARY_FILENAME).write_text(
         json.dumps(
-            {"phase": "static-eval", "passed": overall_passed, "checks": summary},
+            {"phase": "static-eval", "passed": task_passed, "checks": summary},
             indent=2,
         )
     )
 
     logger.info("Static evaluation overall: %s", "PASS" if overall_passed else "FAIL")
     # Exit non-zero in block mode when any gate failed, so the Tekton step fails.
-    if not overall_passed and args.mode == GateMode.BLOCK.value:
+    if not overall_passed and mode_enum == GateMode.BLOCK:
         return 1
     return 0
 
