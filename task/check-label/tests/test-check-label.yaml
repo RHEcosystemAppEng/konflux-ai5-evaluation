@@ -1,0 +1,83 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-check-label
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script (unused by this test).
+  tasks:
+    - name: regression-tests
+      taskSpec:
+        volumes:
+          - name: regression
+            configMap:
+              name: check-label-regression
+        steps:
+          - name: run
+            image: registry.access.redhat.com/ubi9/python-311:latest
+            env:
+              - name: CHECK_LABEL_SCRIPT
+                value: /mnt/regression/check-label.py
+            volumeMounts:
+              - name: regression
+                mountPath: /mnt/regression
+                readOnly: true
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              python3 -m unittest discover -s /mnt/regression -p test_check_label.py -v
+
+    # The optional Secret is deliberately absent. Neither lookup should
+    # contact an API, and both must return the string "false".
+    - name: check-github-without-token
+      taskRef:
+        name: check-label
+      params:
+        - name: git-url
+          value: https://github.com/test/repo
+        - name: git-revision
+          value: deadbeef
+        - name: git-token-secret-name
+          value: check-label-no-token-fixture
+
+    - name: check-gitlab-without-token
+      taskRef:
+        name: check-label
+      params:
+        - name: git-url
+          value: https://gitlab.example.com/test/repo
+        - name: git-revision
+          value: deadbeef
+        - name: git-token-secret-name
+          value: check-label-no-token-fixture
+
+    - name: verify-results
+      runAfter:
+        - check-github-without-token
+        - check-gitlab-without-token
+      params:
+        - name: github-result
+          value: $(tasks.check-github-without-token.results.has-label)
+        - name: gitlab-result
+          value: $(tasks.check-gitlab-without-token.results.has-label)
+      taskSpec:
+        params:
+          - name: github-result
+            type: string
+          - name: gitlab-result
+            type: string
+        steps:
+          - name: verify
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            env:
+              - name: GITHUB_RESULT
+                value: $(params.github-result)
+              - name: GITLAB_RESULT
+                value: $(params.gitlab-result)
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              test "$GITHUB_RESULT" = false
+              test "$GITLAB_RESULT" = false
+              echo "Both platforms return false when the token is absent"
