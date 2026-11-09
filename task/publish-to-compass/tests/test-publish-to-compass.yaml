@@ -82,10 +82,12 @@ spec:
                     "factRef": "abevalflow:default/mcp_protocol_compliance",
                     "entityRef": "component:ai5-marketplace/test-component",
                     "data": {
-                      "check": "protocol-compliance",
                       "passed": true,
                       "score": 1.0,
-                      "message": "Test fact for dry-run"
+                      "status": "passed",
+                      "message": "Test fact for dry-run",
+                      "source": "probe",
+                      "evaluated_at": "2024-01-01T00:00:00+00:00"
                     }
                   }
                 ]

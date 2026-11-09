@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "compass-fact",
   "title": "Compass Fact Data",
-  "description": "Schema for intermediate fact data files produced by the fact generator and consumed by the Compass publisher. Each file contains a facts array with one or more fact objects.",
+  "description": "Schema for intermediate fact data files produced by the fact generator and consumed by the Compass publisher. Each file contains a facts array with one or more fact objects. Conforms to the Backstage Soundcheck Facts API: https://backstage.spotify.com/docs/plugins/soundcheck/api-reference/facts/submit-facts",
   "type": "object",
   "required": ["facts"],
   "additionalProperties": false,
@@ -23,7 +23,7 @@
           },
           "entityRef": {
             "type": "string",
-            "description": "Compass entity reference."
+            "description": "Compass entity reference (format: kind:namespace/name)."
           },
           "data": {
             "type": "object",
@@ -31,6 +31,11 @@
           }
         }
       }
+    },
+    "cache": {
+      "type": "boolean",
+      "description": "Controls whether facts are persisted. Defaults to false if omitted, meaning facts evaluate checks but are not stored. Set to true to persist facts indefinitely.",
+      "default": false
     }
   }
 }
