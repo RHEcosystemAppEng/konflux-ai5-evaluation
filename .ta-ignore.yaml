@@ -50,5 +50,6 @@ paths:
   - task/mcp-static-eval/mcp-static-eval.yaml
   - task/parse-snapshot/parse-snapshot.yaml
   - task/publish-to-compass/publish-to-compass.yaml
+  - task/publish-to-db/publish-to-db.yaml
   - task/teardown-namespace/teardown-namespace.yaml
   - task/wait-ready/wait-ready.yaml

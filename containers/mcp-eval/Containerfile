@@ -71,6 +71,9 @@ COPY task/publish-to-compass/scripts     /opt/publish_to_compass/scripts
 COPY task/publish-to-compass/schemas     /opt/publish_to_compass/schemas
 COPY task/publish-to-compass/templates   /opt/publish_to_compass/templates
 
+# publish-to-db writer
+COPY task/publish-to-db/scripts/store_mcp_results.py /opt/publish_to_db/scripts/store_mcp_results.py
+
 # /opt for task packages, /opt/agent-eval-harness for abevalflow (from base image)
 ENV PYTHONPATH=/opt:/opt/agent-eval-harness
 
