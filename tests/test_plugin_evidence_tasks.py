@@ -9,11 +9,6 @@ class PluginEvidenceTasks(unittest.TestCase):
     def task(self, name):
         return yaml.safe_load((ROOT / 'task' / name / f'{name}.yaml').read_text())['spec']
 
-    def test_prepare_declares_inventory_for_chains(self):
-        results = {r['name']: r for r in self.task('prepare-plugin-oci-ta')['results']}
-        self.assertEqual(results['PLUGIN_PACKAGE']['type'], 'string')
-        self.assertEqual(results['SKILLS']['type'], 'array')
-
     def test_collectors_use_trusted_source_and_explicit_evidence_results(self):
         for name, result in [('verify-plugin-evidence','PLUGIN_VERIFICATION'),('collect-plugin-context','COMPASS_CONTEXT')]:
             task = self.task(name)

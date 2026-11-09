@@ -8,7 +8,6 @@ The managed release team owns its ECP, RPA, release pipeline and credentials.
 
 | Task | Version | Responsibility |
 |---|---|---|
-| [prepare-plugin-oci-ta](task/prepare-plugin-oci-ta/README.md) | 1.1.0 | Package every skill in one plugin; emit trusted source and `PLUGIN_PACKAGE` |
 | [aeh-skill-eval](task/aeh-skill-eval/README.md) | 3.1.0 | Evaluate the package; emit schema-2 signed scores and attach complete reports |
 | [verify-plugin-evidence](task/verify-plugin-evidence/README.md) | 1.0.0 | Bind actual image, package inventory, report hashes and score evidence |
 | [collect-plugin-context](task/collect-plugin-context/README.md) | 1.0.0 | Collect ownership, lifecycle and requested Compass observations |
@@ -21,7 +20,11 @@ in signed image provenance. Native EC checks approved producers and every skill.
 
 Start with [onboarding](docs/onboarding.md). Task READMEs describe interfaces,
 Secrets and workspaces. The native reference build is
-[agentic-plugins](https://gitlab.cee.redhat.com/ai5-marketplace/agentic-plugins/-/blob/per-plugin-componnent/konflux/pipelines/plugin-component-build.yaml).
+[plugin-pipeline](https://gitlab.cee.redhat.com/ai5-marketplace/plugin-pipeline/-/blob/per-plugin-componnent/konflux/pipelines/plugin-component-build.yaml).
+
+Preparation uses the official Konflux `run-script-oci-ta` Task and the approved
+`plugin-pipeline` tools image. The shared build Pipeline owns its command and
+result wiring; this catalog contains only the four domain Tasks above.
 
 ## Publication and validation
 

@@ -24,8 +24,8 @@ No shell skill loop, new controller, queue, or whole-batch automatic retry is us
 
 ## Parameters
 
-For a per-plugin Component, use the entire `SKILLS` array emitted by
-`prepare-plugin-oci-ta` and set `component-manifest` to
+For a per-plugin Component, use the entire `SCRIPT_OUTPUT_ARRAY` inventory emitted by
+the official `run-script-oci-ta` preparation step and set `component-manifest` to
 `.konflux/package/manifest.json`. This verifies complete plugin coverage before
 attaching OCI evidence. An explicit evaluation image containing CLI 0.6.0 or
 newer is required; pin it by digest in consuming pipelines.

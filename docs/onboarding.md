@@ -2,7 +2,7 @@
 
 One plugin maps to one Konflux Component, with scoped PR/push invocations.
 Use the native
-[reference build pipeline](https://gitlab.cee.redhat.com/ai5-marketplace/agentic-plugins/-/blob/per-plugin-componnent/konflux/pipelines/plugin-component-build.yaml).
+[reference build pipeline](https://gitlab.cee.redhat.com/ai5-marketplace/plugin-pipeline/-/blob/per-plugin-componnent/konflux/pipelines/plugin-component-build.yaml).
 Do not add a catalog-wide fanout, registered-SHA bot or a second market evaluator.
 
 ## Developer team
@@ -19,7 +19,7 @@ Do not add a catalog-wide fanout, registered-SHA bot or a second market evaluato
    trusted CA. Never put credentials in source or Task parameters.
 5. Run Tier 1 by default. `evaluate` requests optional Tier 2; PRs disable
    persistence and pushes require PostgreSQL/Compass persistence.
-6. Verify Chains records `PLUGIN_PACKAGE`, `PLUGIN_EVALUATION`,
+6. Verify Chains records `SCRIPT_OUTPUT`, `PLUGIN_EVALUATION`,
    `PLUGIN_VERIFICATION` and `COMPASS_CONTEXT` in signed image provenance.
 7. Configure official EC feedback scenarios using the managed team's policy.
    Review per-skill scores, producer trust, coverage and market results.
