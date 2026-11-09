@@ -20,7 +20,7 @@ def build_check_fact_data(
     entity_ref: str,
     evaluated_at: datetime,
 ) -> dict[str, Any]:
-    """Build fact data for a single check result."""
+    """Build a Soundcheck-compliant fact payload for a single check result."""
     return {
         "facts": [
             {
