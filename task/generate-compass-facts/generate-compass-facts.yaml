@@ -62,6 +62,9 @@ spec:
         # Derive Python module name from task name
         TASK_MODULE="${TASK_NAME//-/_}"
 
+        # Save the workspace-relative path for the result (as documented)
+        FACTS_DIR_RELATIVE="$FACTS_DIR"
+
         SUMMARY_DIR="$(workspaces.source.path)/$SUMMARY_DIR"
         FACTS_DIR="$(workspaces.source.path)/$FACTS_DIR"
 
@@ -74,4 +77,5 @@ spec:
 
         echo "Generated fact files:"
         ls -la "$FACTS_DIR"
-        echo -n "$FACTS_DIR" > "$(results.facts-dir.path)"
+        # Return workspace-relative path as documented
+        echo -n "$FACTS_DIR_RELATIVE" > "$(results.facts-dir.path)"

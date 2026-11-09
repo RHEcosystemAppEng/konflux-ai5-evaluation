@@ -1,0 +1,249 @@
+# Tests actual Helm deployment using a minimal dummy chart and in-cluster kubeconfig.
+# Creates a basic Helm chart structure and verifies the deployment is created.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-deploy-mcp
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: setup-kubeconfig
+      taskSpec:
+        workspaces:
+          - name: kubeconfig-ws
+        steps:
+          - name: create-kubeconfig
+            image: bitnami/kubectl:latest
+            script: |
+              #!/bin/bash
+              set -e
+              KUBECONFIG_PATH="$(workspaces.kubeconfig-ws.path)/kubeconfig"
+              TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              CA_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              cat > "$KUBECONFIG_PATH" <<EOF
+              apiVersion: v1
+              kind: Config
+              clusters:
+              - cluster:
+                  certificate-authority: ${CA_CERT}
+                  server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}
+                name: test-cluster
+              contexts:
+              - context:
+                  cluster: test-cluster
+                  user: test-user
+                name: test-context
+              current-context: test-context
+              users:
+              - name: test-user
+                user:
+                  token: ${TOKEN}
+              EOF
+              echo "Created in-cluster kubeconfig"
+      workspaces:
+        - name: kubeconfig-ws
+          workspace: tests-workspace
+
+    - name: create-test-namespace
+      runAfter:
+        - setup-kubeconfig
+      taskSpec:
+        results:
+          - name: namespace-name
+        steps:
+          - name: create-namespace
+            image: bitnami/kubectl:latest
+            script: |
+              #!/bin/bash
+              set -e
+              NS_NAME="mcp-eval-deploy-test-$(date +%s)"
+              PIPELINE_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+
+              echo "Creating test namespace: ${NS_NAME}"
+              kubectl create namespace "${NS_NAME}"
+
+              # Grant appstudio-pipeline SA permissions in ephemeral namespace
+              # (matches production create-namespace task behavior)
+              kubectl apply -f - <<EOF
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: RoleBinding
+              metadata:
+                name: mcp-eval-ephemeral-access
+                namespace: ${NS_NAME}
+              roleRef:
+                apiGroup: rbac.authorization.k8s.io
+                kind: ClusterRole
+                name: mcp-eval-ephemeral-access
+              subjects:
+                - kind: ServiceAccount
+                  name: appstudio-pipeline
+                  namespace: ${PIPELINE_NS}
+              EOF
+
+              echo -n "${NS_NAME}" > "$(results.namespace-name.path)"
+
+    - name: create-dummy-helm-chart
+      runAfter:
+        - setup-kubeconfig
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: create-chart-structure
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            script: |
+              #!/bin/bash
+              set -e
+              REPO_DIR="$(workspaces.source.path)/mcp-server-repo"
+              mkdir -p "${REPO_DIR}/chart/templates"
+
+              # Create Chart.yaml
+              cat > "${REPO_DIR}/chart/Chart.yaml" <<'EOF'
+              apiVersion: v2
+              name: test-mcp-server
+              description: Test MCP Server Helm Chart
+              type: application
+              version: 0.1.0
+              appVersion: "1.0"
+              EOF
+
+              # Create minimal Deployment template
+              cat > "${REPO_DIR}/chart/templates/deployment.yaml" <<'EOF'
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: {{ .Values.serviceName }}
+              spec:
+                replicas: 1
+                selector:
+                  matchLabels:
+                    app: {{ .Values.serviceName }}
+                template:
+                  metadata:
+                    labels:
+                      app: {{ .Values.serviceName }}
+                  spec:
+                    containers:
+                    - name: mcp-server
+                      image: {{ .Values.image.repository }}:{{ .Values.image.ref }}
+                      ports:
+                      - containerPort: {{ .Values.servicePort }}
+                      resources:
+                        requests:
+                          memory: "32Mi"
+                          cpu: "50m"
+                        limits:
+                          memory: "64Mi"
+                          cpu: "100m"
+              EOF
+
+              # Create Service template
+              cat > "${REPO_DIR}/chart/templates/service.yaml" <<'EOF'
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: {{ .Values.serviceName }}
+              spec:
+                selector:
+                  app: {{ .Values.serviceName }}
+                ports:
+                - protocol: TCP
+                  port: {{ .Values.servicePort }}
+                  targetPort: {{ .Values.servicePort }}
+              EOF
+
+              # Create values-test.yaml
+              cat > "${REPO_DIR}/values-test.yaml" <<'EOF'
+              serviceName: test-mcp-server
+              servicePort: 8080
+              image:
+                repository: registry.access.redhat.com/ubi9/ubi-minimal
+                ref: latest
+              EOF
+
+              echo "Created dummy Helm chart structure"
+              ls -la "${REPO_DIR}"
+              ls -la "${REPO_DIR}/chart"
+              ls -la "${REPO_DIR}/chart/templates"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+
+    - name: run-deploy-mcp
+      runAfter:
+        - create-test-namespace
+        - create-dummy-helm-chart
+      taskRef:
+        name: deploy-mcp
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+        - name: component-image
+          value: "registry.access.redhat.com/ubi9/ubi-minimal:latest"
+        - name: repo-subdir
+          value: "mcp-server-repo"
+        - name: service-name
+          value: "test-mcp-server"
+        - name: service-port
+          value: "8080"
+        - name: image-pull-secret
+          value: "nonexistent-pull-secret"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+        - name: target-kubeconfig
+          workspace: tests-workspace
+
+    - name: verify-deployment
+      runAfter:
+        - run-deploy-mcp
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+        - name: mcp-url
+          value: $(tasks.run-deploy-mcp.results.mcp-url)
+        - name: release-name
+          value: $(tasks.run-deploy-mcp.results.release-name)
+      taskSpec:
+        params:
+          - name: namespace-name
+            type: string
+          - name: mcp-url
+            type: string
+          - name: release-name
+            type: string
+        steps:
+          - name: check-deployment
+            image: bitnami/kubectl:latest
+            env:
+              - name: NAMESPACE
+                value: $(params.namespace-name)
+              - name: MCP_URL
+                value: $(params.mcp-url)
+              - name: RELEASE_NAME
+                value: $(params.release-name)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "Verifying deployment in namespace: ${NAMESPACE}"
+              echo "MCP URL: ${MCP_URL}"
+              echo "Release name: ${RELEASE_NAME}"
+
+              if ! kubectl get deployment test-mcp-server -n "${NAMESPACE}"; then
+                echo "FAIL: Deployment was not created"
+                exit 1
+              fi
+
+              if ! kubectl get service test-mcp-server -n "${NAMESPACE}"; then
+                echo "FAIL: Service was not created"
+                exit 1
+              fi
+
+              if ! kubectl get secret nonexistent-pull-secret -n "${NAMESPACE}"; then
+                echo "FAIL: Secret was not copied to ephemeral namespace"
+                exit 1
+              fi
+
+              echo "Helm deployment and secrets created successfully"
