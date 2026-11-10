@@ -35,7 +35,8 @@ def build_check_fact_data(
                     "evaluated_at": evaluated_at.isoformat(),
                 },
             }
-        ]
+        ],
+        "cache": True,
     }
 
 
