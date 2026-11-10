@@ -1,0 +1,106 @@
+# Tests actual namespace creation using an in-cluster kubeconfig.
+# Verifies the namespace is created with correct labels and RBAC.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-create-namespace
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: setup-kubeconfig
+      taskSpec:
+        workspaces:
+          - name: kubeconfig-ws
+        steps:
+          - name: create-kubeconfig
+            image: bitnami/kubectl:latest
+            script: |
+              #!/bin/bash
+              set -e
+              KUBECONFIG_PATH="$(workspaces.kubeconfig-ws.path)/kubeconfig"
+              TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              CA_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              cat > "$KUBECONFIG_PATH" <<EOF
+              apiVersion: v1
+              kind: Config
+              clusters:
+              - cluster:
+                  certificate-authority: ${CA_CERT}
+                  server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}
+                name: test-cluster
+              contexts:
+              - context:
+                  cluster: test-cluster
+                  user: test-user
+                name: test-context
+              current-context: test-context
+              users:
+              - name: test-user
+                user:
+                  token: ${TOKEN}
+              EOF
+              echo "Created in-cluster kubeconfig"
+      workspaces:
+        - name: kubeconfig-ws
+          workspace: tests-workspace
+
+    - name: run-create-namespace
+      runAfter:
+        - setup-kubeconfig
+      taskRef:
+        name: create-namespace
+      params:
+        - name: pipeline-run-id
+          value: "test-$(context.pipelineRun.uid)"
+        - name: pipeline-sa-name
+          value: "appstudio-pipeline"
+        - name: pipeline-sa-namespace
+          value: "$(context.pipelineRun.namespace)"
+      workspaces:
+        - name: target-kubeconfig
+          workspace: tests-workspace
+
+    - name: verify-namespace
+      runAfter:
+        - run-create-namespace
+      params:
+        - name: namespace-name
+          value: $(tasks.run-create-namespace.results.namespace-name)
+      taskSpec:
+        params:
+          - name: namespace-name
+            type: string
+        steps:
+          - name: check-namespace
+            image: bitnami/kubectl:latest
+            env:
+              - name: NAMESPACE_NAME
+                value: $(params.namespace-name)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "Verifying namespace: ${NAMESPACE_NAME}"
+              if ! kubectl get namespace "${NAMESPACE_NAME}"; then
+                echo "FAIL: Namespace was not created"
+                exit 1
+              fi
+              LABEL=$(kubectl get namespace "${NAMESPACE_NAME}" -o jsonpath='{.metadata.labels.abevalflow/type}')
+              if [ "$LABEL" != "mcp-eval" ]; then
+                echo "FAIL: Namespace missing correct label, got: ${LABEL}"
+                exit 1
+              fi
+              echo "Namespace created successfully with correct labels"
+
+              echo "Verifying RoleBinding in namespace: ${NAMESPACE_NAME}"
+              if ! kubectl get rolebinding mcp-eval-ephemeral-access -n "${NAMESPACE_NAME}"; then
+                echo "FAIL: RoleBinding mcp-eval-ephemeral-access was not created"
+                exit 1
+              fi
+              ROLE_REF=$(kubectl get rolebinding mcp-eval-ephemeral-access -n "${NAMESPACE_NAME}" -o jsonpath='{.roleRef.name}')
+              if [ "$ROLE_REF" != "mcp-eval-ephemeral-access" ]; then
+                echo "FAIL: RoleBinding references wrong ClusterRole, got: ${ROLE_REF}"
+                exit 1
+              fi
+              echo "RoleBinding verified successfully"

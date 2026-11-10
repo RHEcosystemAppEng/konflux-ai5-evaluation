@@ -1,0 +1,81 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: generate-compass-facts
+  labels:
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/name: abevalflow
+    app.kubernetes.io/component: konflux
+spec:
+  description: >-
+    Generate Compass SoundCheck fact payloads from evaluation phase
+    summaries. Validates each JSON file in the summary directory
+    against the phase summary schema and writes check-level fact data
+    files to the workspace. Only individual check facts are generated
+    (no phase or evaluation summaries). No Compass interaction.
+  params:
+    - name: mcp-eval-image
+      type: string
+      default: "quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1"
+    - name: summary-dir
+      type: string
+      default: "reports"
+      description: Workspace-relative directory containing phase summary JSON files.
+    - name: facts-dir
+      type: string
+      default: "facts"
+      description: Workspace-relative directory to write fact data JSON files.
+    - name: component-name
+      type: string
+      description: Component name for the Compass entity ref (e.g. my-mcp-server).
+    - name: scorecard-config
+      type: string
+      default: "config/scorecard.yaml"
+      description: >-
+        Path to the scorecard YAML config file, relative to the task module.
+        Defaults to the built-in config/scorecard.yaml.
+  workspaces:
+    - name: source
+      description: Workspace with the summary directory.
+  results:
+    - name: facts-dir
+      description: Workspace-relative path to the generated facts directory.
+  steps:
+    - name: generate-facts
+      image: $(params.mcp-eval-image)
+      imagePullPolicy: Always
+      env:
+        - name: TASK_NAME
+          value: $(context.task.name)
+        - name: SUMMARY_DIR
+          value: $(params.summary-dir)
+        - name: FACTS_DIR
+          value: $(params.facts-dir)
+        - name: COMPONENT_NAME
+          value: $(params.component-name)
+        - name: SCORECARD_CONFIG
+          value: $(params.scorecard-config)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # Derive Python module name from task name
+        TASK_MODULE="${TASK_NAME//-/_}"
+
+        # Save the workspace-relative path for the result (as documented)
+        FACTS_DIR_RELATIVE="$FACTS_DIR"
+
+        SUMMARY_DIR="$(workspaces.source.path)/$SUMMARY_DIR"
+        FACTS_DIR="$(workspaces.source.path)/$FACTS_DIR"
+
+        echo "=== Generating fact payloads ==="
+        python -m "${TASK_MODULE}.scripts.run_generate_compass_facts" \
+          --summary-dir "$SUMMARY_DIR" \
+          --output-dir "$FACTS_DIR" \
+          --component-name "$COMPONENT_NAME" \
+          --scorecard-config "/opt/${TASK_MODULE}/${SCORECARD_CONFIG}"
+
+        echo "Generated fact files:"
+        ls -la "$FACTS_DIR"
+        # Return workspace-relative path as documented
+        echo -n "$FACTS_DIR_RELATIVE" > "$(results.facts-dir.path)"

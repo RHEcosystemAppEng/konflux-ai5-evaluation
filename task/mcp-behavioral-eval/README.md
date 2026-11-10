@@ -1,0 +1,83 @@
+# mcp-behavioral-eval task
+
+LLM-driven behavioral evaluation using mcpchecker against a deployed MCP
+server. Runs as a Kubernetes Job on the target cluster. Tests tool
+correctness, edge-case handling, and sensitive data redaction using
+configurable task suites.
+
+## Parameters
+
+| name | description | default value | required |
+|---|---|---|---|
+| namespace-name | Ephemeral namespace where MCP server is deployed | | true |
+| service-name | K8s Service name of deployed MCP server | `mcp-server` | false |
+| service-port | Port MCP server listens on | `8080` | false |
+| job-timeout | Timeout for mcpchecker Job (seconds) | `1800` | false |
+| llm-agent-secret | Secret name for LLM agent credentials | `mcp-eval-llm-agent` | false |
+| llm-judge-secret | Secret name for judge LLM model | `mcp-eval-llm-judge` | false |
+| llm-ca-secret | Secret name for CA cert bundle for internal LLM endpoints | `mcp-eval-ca` | false |
+| mcp-eval-image | MCP eval image with mcpchecker and pipeline code | `quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1` | false |
+| mcp-path | URL path suffix for MCP Streamable HTTP endpoint | `/mcp` | false |
+| job-template | Relative path to the Kubernetes Job template (from task directory) | `templates/mcp-behavioral-eval-job.yaml` | false |
+| suites-dir | Relative path to the mcpchecker task suites directory (from task directory) | `suites/default` | false |
+| secrets-namespace | Namespace on the target cluster where LLM secrets are stored | `default` | false |
+| pipeline-run-id | Pipeline run ID for provenance | | true |
+| submission-name | Component name being evaluated | | true |
+
+## Results
+
+| name | description |
+|---|---|
+| eval-passed | `true` if behavioral eval passed the pass threshold, `false` otherwise, `error` on failure. |
+| report-path | Workspace-relative path to the generated reports directory. |
+
+The pass threshold is currently hardcoded to **0.7** (70%) inside the
+`abevalflow` library and is not yet configurable per task. A configurable
+`pass-threshold` parameter will be added in a future version.
+
+## Workspaces
+
+| name | description |
+|---|---|
+| source | Results output directory. |
+| target-kubeconfig | Kubeconfig for the target cluster where the MCP server is deployed. |
+
+## Secrets
+
+Secrets are read from the **target test cluster** (in the namespace
+specified by `secrets-namespace`, default `default`) and copied into the
+ephemeral evaluation namespace.
+
+| Secret (param) | Keys | Source | Purpose |
+|---|---|---|---|
+| `llm-agent-secret` (default `mcp-eval-llm-agent`) | `openai-api-key`, `openai-base-url`, `anthropic-api-key`, `anthropic-base-url`, `model-name` | Target cluster (`secrets-namespace`) | LLM agent credentials for mcpchecker. |
+| `llm-judge-secret` (default `mcp-eval-llm-judge`) | `model` | Target cluster (`secrets-namespace`) | Judge LLM model name. |
+| `llm-ca-secret` (default `mcp-eval-ca`) | `ca.crt` | Target cluster (`secrets-namespace`) | CA certificate bundle for internal LLM endpoints. |
+
+## Usage
+
+```yaml
+- name: mcp-behavioral-eval
+  runAfter: [mcp-conformance-eval]
+  taskRef:
+    resolver: bundles
+    params:
+    - name: name
+      value: mcp-behavioral-eval
+    - name: bundle
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-behavioral-eval:0.1.0@sha256:18e6de20071478c9211e1b489a2f105a250ff1baff2c05b42df72247a32b60c0"
+    - name: kind
+      value: task
+  params:
+  - name: namespace-name
+    value: $(tasks.create-namespace.results.namespace-name)
+  - name: pipeline-run-id
+    value: $(context.pipelineRun.name)
+  - name: submission-name
+    value: $(tasks.parse-snapshot.results.component-name)
+  workspaces:
+  - name: source
+    workspace: shared-workspace
+  - name: target-kubeconfig
+    workspace: target-kubeconfig
+```

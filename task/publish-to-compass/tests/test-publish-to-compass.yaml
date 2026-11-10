@@ -1,0 +1,146 @@
+# Tests dry-run mode with actual fact files and dummy Compass secret.
+# Creates valid fact files, dummy secret, and verifies the task runs
+# the publish Job in dry-run mode without hitting the actual Compass API.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-publish-to-compass
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: setup-kubeconfig
+      taskSpec:
+        workspaces:
+          - name: kubeconfig-ws
+        steps:
+          - name: create-kubeconfig
+            image: bitnami/kubectl:latest
+            script: |
+              #!/bin/bash
+              set -e
+              KUBECONFIG_PATH="$(workspaces.kubeconfig-ws.path)/kubeconfig"
+              TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              CA_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              cat > "$KUBECONFIG_PATH" <<EOF
+              apiVersion: v1
+              kind: Config
+              clusters:
+              - cluster:
+                  certificate-authority: ${CA_CERT}
+                  server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}
+                name: test-cluster
+              contexts:
+              - context:
+                  cluster: test-cluster
+                  user: test-user
+                name: test-context
+              current-context: test-context
+              users:
+              - name: test-user
+                user:
+                  token: ${TOKEN}
+              EOF
+              echo "Created in-cluster kubeconfig"
+      workspaces:
+        - name: kubeconfig-ws
+          workspace: tests-workspace
+
+    - name: create-test-namespace
+      runAfter:
+        - setup-kubeconfig
+      taskSpec:
+        results:
+          - name: namespace-name
+        steps:
+          - name: create-namespace
+            image: bitnami/kubectl:latest
+            script: |
+              #!/bin/bash
+              set -e
+              NS_NAME="mcp-eval-publish-test-$(date +%s)"
+              echo "Creating test namespace: ${NS_NAME}"
+              kubectl create namespace "${NS_NAME}"
+              echo -n "${NS_NAME}" > "$(results.namespace-name.path)"
+
+    - name: setup-test-facts
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: create-fact-files
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            script: |
+              #!/bin/bash
+              set -e
+              mkdir -p "$(workspaces.source.path)/facts"
+              cat > "$(workspaces.source.path)/facts/conformance-check.json" <<'EOF'
+              {
+                "facts": [
+                  {
+                    "factRef": "abevalflow:default/mcp_protocol_compliance",
+                    "entityRef": "component:ai5-marketplace/test-component",
+                    "data": {
+                      "passed": true,
+                      "score": 1.0,
+                      "status": "passed",
+                      "message": "Test fact for dry-run",
+                      "source": "probe",
+                      "evaluated_at": "2024-01-01T00:00:00+00:00"
+                    }
+                  }
+                ]
+              }
+              EOF
+              echo "Created test fact files"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+
+    - name: run-publish-to-compass
+      runAfter:
+        - create-test-namespace
+        - setup-test-facts
+      taskRef:
+        name: publish-to-compass
+      params:
+        - name: facts-dir
+          value: "facts"
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+        - name: compass-secret
+          value: "mcp-eval-compass"
+        - name: dry-run
+          value: "true"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+        - name: target-kubeconfig
+          workspace: tests-workspace
+
+    - name: verify-dry-run
+      runAfter:
+        - run-publish-to-compass
+      params:
+        - name: publish-status
+          value: $(tasks.run-publish-to-compass.results.publish-status)
+      taskSpec:
+        params:
+          - name: publish-status
+            type: string
+        steps:
+          - name: check-dry-run
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            env:
+              - name: PUBLISH_STATUS
+                value: $(params.publish-status)
+            script: |
+              #!/bin/bash
+              set -e
+              echo "publish-status=${PUBLISH_STATUS}"
+              if [ "$PUBLISH_STATUS" != "dry-run" ]; then
+                echo "FAIL: expected publish-status=dry-run, got '${PUBLISH_STATUS}'"
+                exit 1
+              fi
+              echo "publish-to-compass successfully ran in dry-run mode"
