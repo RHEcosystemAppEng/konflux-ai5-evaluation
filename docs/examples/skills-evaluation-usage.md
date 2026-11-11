@@ -7,7 +7,7 @@ itself uses in its `.tekton/skills-evaluation-push.yaml` /
 `taskRef.resolver: bundles` instead of a `git` resolver pinned at this
 repo's own revision.
 
-For another catalog, configure `check-label` with its repository URL and
+For another catalog, configure `check-pr-label` with its repository URL and
 token Secret. Configure the GitLab repository and script parameters on
 `discover-changed-skills` and `update-registered-shas` for that catalog.
 
@@ -15,7 +15,7 @@ token Secret. Configure the GitLab repository and script parameters on
 
 ```mermaid
 flowchart TD
-    clone[clone-repository] --> checkLabel[check-label]
+    clone[clone-repository] --> checkLabel[check-pr-label]
     checkLabel --> discover[discover-changed-skills]
     discover --> evalMatrix["evaluate-skill (Matrix over aeh-skill-eval,\none leg per changed-skills entry)"]
     evalMatrix --> gateTierA[aggregate-fanout-result\nTEST_OUTPUT_TIER_A, hard gate]
@@ -23,7 +23,7 @@ flowchart TD
     updateShas --> emitTierB[aggregate-fanout-result\nTEST_OUTPUT_TIER_B, informational]
 ```
 
-`check-label` is only needed on a push-to-main pipeline (it gates the
+`check-pr-label` is only needed on a push-to-main pipeline (it gates the
 LLM-cost Tier B chain behind a merged MR's label); a pull-request pipeline
 can skip straight to `discover-changed-skills` and pass `should-evaluate:
 "false"` as a static value into the Matrix, so only the always-on Tier A
@@ -33,13 +33,13 @@ Configure the push pipeline's label gate explicitly. Publish the new
 bundle and pin its digest before switching the consuming pipeline.
 
 ```yaml
-- name: check-label
+- name: check-pr-label
   runAfter: [clone-repository]
   taskRef:
     resolver: bundles
     params:
-    - {name: name, value: check-label}
-    - {name: bundle, value: quay.io/ecosystem-appeng/konflux-skill-evaluation/check-label:0.1.0}
+    - {name: name, value: check-pr-label}
+    - {name: bundle, value: quay.io/ecosystem-appeng/konflux-skill-evaluation/check-pr-label:0.1.0}
     - {name: kind, value: task}
   params:
   - {name: git-url, value: https://gitlab.cee.redhat.com/ai5-marketplace/agentic-plugins}
@@ -89,7 +89,7 @@ explicit values to point at your own repository instead.
   params:
   - {name: submission-revision, value: "$(params.revision)"}
   - {name: source-artifact, value: "$(tasks.clone-repository.results.SOURCE_ARTIFACT)"}
-  - {name: should-evaluate, value: "$(tasks.check-label.results.has-label)"}
+  - {name: should-evaluate, value: "$(tasks.check-pr-label.results.has-label)"}
   - {name: changed-skills, value: $(tasks.discover-changed-skills.results.changed-skills[*])}
   - {name: enable-persistence, value: "true"}
   workspaces:
@@ -132,7 +132,7 @@ chain) only runs when `should-evaluate` AND that leg's own membership in
     - {name: kind, value: task}
   params:
   - {name: current-sha, value: "$(params.revision)"}
-  - {name: should-evaluate, value: "$(tasks.check-label.results.has-label)"}
+  - {name: should-evaluate, value: "$(tasks.check-pr-label.results.has-label)"}
   - {name: changed-skills, value: $(tasks.discover-changed-skills.results.changed-skills[*])}
   - {name: eval-outcomes, value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_B[*])}
   workspaces:
@@ -148,7 +148,7 @@ chain) only runs when `should-evaluate` AND that leg's own membership in
     - {name: kind, value: task}
   params:
   - {name: SOURCE_ARTIFACT, value: "$(tasks.clone-repository.results.SOURCE_ARTIFACT)"}
-  - {name: should-evaluate, value: "$(tasks.check-label.results.has-label)"}
+  - {name: should-evaluate, value: "$(tasks.check-pr-label.results.has-label)"}
   - {name: changed-skills, value: $(tasks.discover-changed-skills.results.changed-skills[*])}
   - {name: eval-outcomes, value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_B[*])}
   # fail-on-non-success left at its default "false" -- informational only
