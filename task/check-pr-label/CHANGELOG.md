@@ -8,12 +8,7 @@
 
 ### Added
 
-- Initial version, extracted from agentic-plugins' `.tekton/tasks/check-pr-label.yaml`.
-- Checks whether the merged MR for a commit SHA on a GitLab project carries
-  a given label.
-- No behavior change from the agentic-plugins original: this version adds
-  `label-name`/`gitlab-server-url`/`gitlab-project-path`/
-  `git-token-secret-name`/`git-token-secret-key` params (all defaulted to
-  the previously-hardcoded values) so the Task is reusable by other
-  GitLab-hosted projects, plus the `app.kubernetes.io/version` label /
-  `tekton.dev/tags` annotation.
+- Check GitHub PRs and GitLab MRs for a caller-specified label and optional status.
+- Select requests by explicit PR/MR number, caller-provided metadata, or commit SHA when no number is available.
+- Return the `has-label` result without falling back to commit lookup after a direct lookup failure.
+- Read Git credentials from a configurable Secret name and key.

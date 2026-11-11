@@ -1,44 +1,61 @@
 # check-pr-label task
 
-Checks whether the **merged** merge request for a given commit SHA on a
-GitLab project carries a given label. Returns `"true"` only in that case;
-`"false"` otherwise, including when no merged MR is found at all
-(fail-closed).
+Checks whether a specific pull request or merge request, or one associated with
+a commit, has a target label. Supports GitHub, GitHub Enterprise, and GitLab hosts.
+Returns a string result that can gate an optional evaluation task.
 
-Intended to gate an expensive/opt-in chain later in a pipeline (e.g. an LLM
-evaluation step) behind an explicit label on the merged MR, so that
-expensive work only runs when a human reviewer opted in.
-
-GitLab-specific by design (calls the GitLab REST API directly), but
-reusable by **any** GitLab-hosted project -- every GitLab-specific detail is
-a parameter.
+For the skills evaluation gate, set `target-label: evaluate` and
+`pr-status-is: merged` so an open request cannot enable the evaluation.
 
 ## Parameters
 
 | name | description | default value | required |
 |---|---|---|---|
-| current-sha | Commit SHA to look up merge requests for. | | true |
-| label-name | Label that must be present on the merged MR for this result to be `"true"`. | `"evaluate"` | false |
-| gitlab-server-url | Base URL of the GitLab server hosting the project. | `"https://gitlab.cee.redhat.com"` | false |
-| gitlab-project-path | URL-encoded `namespace%2Fproject` path of the GitLab project. | `"ai5-marketplace%2Fagentic-plugins"` | false |
-| git-token-secret-name | Name of the Secret containing a GitLab access token with API read access to the project. | `"agentic-plugins-gitlab-sa"` | false |
-| git-token-secret-key | Key within `git-token-secret-name` holding the GitLab access token. | `"password"` | false |
+| git-url | HTTPS repository URL; its host selects the GitHub or GitLab API | | true |
+| git-revision | Commit SHA used to find associated pull or merge requests | | true |
+| pr-number | Repository-scoped GitHub PR number or GitLab MR IID | `""` | false |
+| target-label | Label to look for | | true |
+| pr-status-is | Request status: `open`, `merged`, `closed`, or empty for any status | `""` | false |
+| git-token-secret-name | Secret containing the Git access token | `git-secret` | false |
+| git-token-secret-key | Key containing the token in that Secret | `password` | false |
 
 ## Results
 
 | name | description |
 |---|---|
-| should-evaluate | `"true"` only if a MERGED MR for `current-sha` carries the `label-name` label; `"false"` otherwise. |
+| has-label | `true` if an associated request matches the label and optional status; `false` otherwise. |
+
+The task returns `false` if no token is available, no request matches, or
+the API lookup fails, including malformed JSON responses. Invalid status
+values and unsupported hosts with a token fail the task.
+
+The task uses the existing Python image and installs no packages at runtime.
+
+Request selection uses explicit `pr-number` first, then the optional
+`CONTEXT_PR_NUMBER` environment variable injected by the calling PipelineRun.
+When both are empty, the existing commit lookup is used. A direct lookup failure
+returns `false` without falling back to another request associated with the SHA.
+Commit lookup retains its existing behavior: any matching associated request
+can return `true`.
+
+## Workspaces
+
+None.
 
 ## Secrets
 
-| Secret (param) | Key (param) | Required | Purpose |
+| Secret (param) | Keys | Source | Purpose |
 |---|---|---|---|
-| `git-token-secret-name` (default `agentic-plugins-gitlab-sa`) | `git-token-secret-key` (default `password`) | yes | GitLab personal/project access token with `read_api` scope, used to query merge requests for a commit. |
+| `git-token-secret-name` | `git-token-secret-key` (optional) | Namespace running the Task | Read pull or merge requests from the Git API. |
 
-No ConfigMaps are used by this Task.
+The task sends the token through the GitHub `Authorization` header or GitLab
+`PRIVATE-TOKEN` header. Hostnames must contain `github` or `gitlab`, matching
+the source task's platform detection.
 
 ## Usage
+
+Publish this new task bundle before use and pin its resolved digest in the
+consuming pipeline. The tag below illustrates the bundle location.
 
 ```yaml
 - name: check-pr-label
@@ -48,21 +65,19 @@ No ConfigMaps are used by this Task.
     - name: name
       value: check-pr-label
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/check-pr-label:0.1.0@sha256:27196ca1f4bc04b570ff230e9ccbb174faf8beabd2240db7222c2f5cc2649eb6"
+      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/check-pr-label:0.1.0
     - name: kind
       value: task
   params:
-  - name: current-sha
-    value: $(params.revision)
-  - name: label-name
-    value: "evaluate"
-  - name: gitlab-server-url
-    value: "https://gitlab.cee.redhat.com"
-  - name: gitlab-project-path
-    value: "my-group%2Fmy-project"
-  - name: git-token-secret-name
-    value: "my-gitlab-sa"
+  - name: git-url
+    value: $(tasks.parse-snapshot.results.git-url)
+  - name: git-revision
+    value: $(tasks.parse-snapshot.results.git-revision)
+  - name: target-label
+    value: evaluate
+  - name: pr-status-is
+    value: merged
 ```
 
-Consume the result downstream as `$(tasks.check-pr-label.results.should-evaluate)`,
-e.g. as a `when:` expression gating a later Task/Matrix.
+Use `$(tasks.check-pr-label.results.has-label)` in a downstream task's `when`
+expression to run it only when the result is `true`.

@@ -17,7 +17,7 @@ to.
 |---|---|---|
 | [aeh-skill-eval](task/aeh-skill-eval/README.md) | Per-item security/quality (Tier A) + opt-in LLM (Tier B) evaluation, designed to be `Matrix`-fanned-out over a catalog. | 0.1.0 |
 | [aggregate-fanout-result](task/aggregate-fanout-result/README.md) | Aggregates a `Matrix`'s per-item `TEST_OUTPUT`s into one standardized, optionally hard-gating result. | 0.1.0 |
-| [check-pr-label](task/check-pr-label/README.md) | Fail-closed check of whether the merged MR for a commit carries an opt-in label (GitLab). | 0.1.0 |
+| [check-pr-label](task/check-pr-label/README.md) | Checks GitHub PRs or GitLab MRs for a caller-specified label and optional status. | 0.1.0 |
 | [discover-changed-skills](task/discover-changed-skills/README.md) | Diffs a catalog's registered SHAs against the current SHA to find what changed (GitLab). | 0.1.0 |
 | [update-registered-shas](task/update-registered-shas/README.md) | Bumps a catalog's registered SHAs and pushes the bookkeeping commit (GitLab). | 0.1.0 |
 | [parse-snapshot](task/parse-snapshot/README.md) | Parses a Konflux Snapshot JSON to extract component image, git URL, revision, and name. | 0.1.0 |
@@ -42,7 +42,7 @@ agentic-plugins itself uses).
 - `aeh-skill-eval` and `aggregate-fanout-result` are **fully generic**: they
   depend only on their own image, params, and Secrets -- no coupling to any
   particular source repository.
-- `check-pr-label`, `discover-changed-skills`, and `update-registered-shas`
+- `discover-changed-skills` and `update-registered-shas`
   are **GitLab-specific by design** (they call the GitLab REST API / do
   their own `git clone`+`push`), but every GitLab project detail
   (server URL, project path, clone/push URL, branch, bot identity, token
@@ -52,7 +52,7 @@ agentic-plugins itself uses).
   own repository. They additionally expect that repository to carry its
   own `detect-script-path`/`register-script-path`/`aggregate-script-path`
   scripts implementing the small CLI contracts documented in each task's
-  `README.md` -- these three tasks implement a *bookkeeping pattern*, not a
+  `README.md` -- these two tasks implement a *bookkeeping pattern*, not a
   fully self-contained integration.
 
 `publish-to-compass` creates a temporary ConfigMap on the target cluster to
