@@ -1,8 +1,8 @@
-# check-label task
+# check-pr-label task
 
-Checks whether a pull request or merge request associated with a commit has a
-target label. Supports GitHub, GitHub Enterprise, and GitLab hosts. Returns a
-string result that can gate an optional evaluation task.
+Checks whether a specific pull request or merge request, or one associated with
+a commit, has a target label. Supports GitHub, GitHub Enterprise, and GitLab hosts.
+Returns a string result that can gate an optional evaluation task.
 
 For the skills evaluation gate, set `target-label: evaluate` and
 `pr-status-is: merged` so an open request cannot enable the evaluation.
@@ -13,7 +13,8 @@ For the skills evaluation gate, set `target-label: evaluate` and
 |---|---|---|---|
 | git-url | HTTPS repository URL; its host selects the GitHub or GitLab API | | true |
 | git-revision | Commit SHA used to find associated pull or merge requests | | true |
-| target-label | Label to look for | `evaluate` | false |
+| pr-number | Repository-scoped GitHub PR number or GitLab MR IID | `""` | false |
+| target-label | Label to look for | | true |
 | pr-status-is | Request status: `open`, `merged`, `closed`, or empty for any status | `""` | false |
 | git-token-secret-name | Secret containing the Git access token | `git-secret` | false |
 | git-token-secret-key | Key containing the token in that Secret | `password` | false |
@@ -29,6 +30,13 @@ the API lookup fails, including malformed JSON responses. Invalid status
 values and unsupported hosts with a token fail the task.
 
 The task uses the existing Python image and installs no packages at runtime.
+
+Request selection uses explicit `pr-number` first, then the optional
+`CONTEXT_PR_NUMBER` environment variable injected by the calling PipelineRun.
+When both are empty, the existing commit lookup is used. A direct lookup failure
+returns `false` without falling back to another request associated with the SHA.
+Commit lookup retains its existing behavior: any matching associated request
+can return `true`.
 
 ## Workspaces
 
@@ -50,14 +58,14 @@ Publish this new task bundle before use and pin its resolved digest in the
 consuming pipeline. The tag below illustrates the bundle location.
 
 ```yaml
-- name: check-label
+- name: check-pr-label
   taskRef:
     resolver: bundles
     params:
     - name: name
-      value: check-label
+      value: check-pr-label
     - name: bundle
-      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/check-label:0.1.0
+      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/check-pr-label:0.1.0
     - name: kind
       value: task
   params:
@@ -71,5 +79,5 @@ consuming pipeline. The tag below illustrates the bundle location.
     value: merged
 ```
 
-Use `$(tasks.check-label.results.has-label)` in a downstream task's `when`
+Use `$(tasks.check-pr-label.results.has-label)` in a downstream task's `when`
 expression to run it only when the result is `true`.

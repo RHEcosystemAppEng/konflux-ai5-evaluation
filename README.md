@@ -17,7 +17,7 @@ to.
 |---|---|---|
 | [aeh-skill-eval](task/aeh-skill-eval/README.md) | Per-item security/quality (Tier A) + opt-in LLM (Tier B) evaluation, designed to be `Matrix`-fanned-out over a catalog. | 0.1.0 |
 | [aggregate-fanout-result](task/aggregate-fanout-result/README.md) | Aggregates a `Matrix`'s per-item `TEST_OUTPUT`s into one standardized, optionally hard-gating result. | 0.1.0 |
-| [check-label](task/check-label/README.md) | Checks a commit’s associated GitHub PRs or GitLab MRs for a label and optional status. | 0.1.0 |
+| [check-pr-label](task/check-pr-label/README.md) | Checks GitHub PRs or GitLab MRs for a caller-specified label and optional status. | 0.1.0 |
 | [discover-changed-skills](task/discover-changed-skills/README.md) | Diffs a catalog's registered SHAs against the current SHA to find what changed (GitLab). | 0.1.0 |
 | [update-registered-shas](task/update-registered-shas/README.md) | Bumps a catalog's registered SHAs and pushes the bookkeeping commit (GitLab). | 0.1.0 |
 | [parse-snapshot](task/parse-snapshot/README.md) | Parses a Konflux Snapshot JSON to extract component image, git URL, revision, and name. | 0.1.0 |

@@ -69,7 +69,7 @@ No ConfigMaps are used by this Task.
   - name: current-sha
     value: $(params.revision)
   - name: should-evaluate
-    value: $(tasks.check-label.results.has-label)
+    value: $(tasks.check-pr-label.results.has-label)
   - name: changed-skills
     value: $(tasks.discover-changed-skills.results.changed-skills[*])
   - name: eval-outcomes

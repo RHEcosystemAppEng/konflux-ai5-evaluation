@@ -105,7 +105,7 @@ spec:
       default: "false"
       description: >-
         Pipeline-wide (same value for every leg): "true" only when the
-        push pipeline's check-label found a merged MR labeled
+        push pipeline's check-pr-label found a merged MR labeled
         "evaluate" for this commit. Always "false" on PR builds (Tier B's
         LLM chain must never run there).
     - name: changed-skills

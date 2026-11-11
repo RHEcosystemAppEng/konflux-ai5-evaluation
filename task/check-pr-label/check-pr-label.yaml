@@ -1,19 +1,18 @@
-# TODO: Update ai5-marketplace/agentic-plugins/.tekton/skills-evaluation-push.yaml
-# to use this Task and pin its published bundle digest. Pass target-label=evaluate
-# and pr-status-is=merged; update runAfter and result references to check-label
-# and has-label, retaining the existing Git token Secret.
+# to use this Task version and pin its published bundle digest. Pass git-url,
+# git-revision, target-label=evaluate, and pr-status-is=merged; use the has-label
+# result and retain the existing Git token Secret.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
-  name: check-label
+  name: check-pr-label
   labels:
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/name: abevalflow
     app.kubernetes.io/component: konflux
 spec:
   description: >-
-    Checks whether a target PR label is present on the pull/merge request
-    associated with a given git commit. Supports both GitHub and GitLab.
+    Checks whether a target PR label is present on a specific pull/merge request
+    or one associated with a given git commit. Supports both GitHub and GitLab.
     Derives the API endpoint from the git-url host. Returns "true" if the
     label is found, "false" otherwise.
   params:
@@ -23,9 +22,12 @@ spec:
     - name: git-revision
       type: string
       description: Git commit SHA to look up associated PRs/MRs for
+    - name: pr-number
+      type: string
+      default: ""
+      description: Optional repository-scoped PR number or GitLab MR IID; overrides CONTEXT_PR_NUMBER and commit lookup
     - name: target-label
       type: string
-      default: "evaluate"
       description: PR/MR label name to check for
     - name: pr-status-is
       type: string
@@ -50,6 +52,8 @@ spec:
           value: $(params.git-url)
         - name: REVISION
           value: $(params.git-revision)
+        - name: PR_NUMBER
+          value: $(params.pr-number)
         - name: TARGET_LABEL
           value: $(params.target-label)
         - name: PR_STATUS
@@ -86,15 +90,20 @@ spec:
             host = (repository.hostname or "").lower()
             path = repository.path.rstrip("/").lstrip("/").removesuffix(".git")
             revision = os.environ["REVISION"]
+            pr_number = os.environ.get("PR_NUMBER", "") or os.environ.get("CONTEXT_PR_NUMBER", "")
             if "github" in host:
                 platform = "github"
                 api = "https://api.github.com" if host == "github.com" else f"{repository.scheme}://{repository.netloc}/api/v3"
                 url = f"{api}/repos/{path}/commits/{revision}/pulls"
+                if pr_number:
+                    url = f"{api}/repos/{path}/pulls/{pr_number}"
                 headers = {"Accept": "application/vnd.github+json", "Authorization": f"token {token}"}
             elif "gitlab" in host:
                 platform = "gitlab"
                 project = urllib.parse.quote(path, safe="")
                 url = f"{repository.scheme}://{repository.netloc}/api/v4/projects/{project}/repository/commits/{revision}/merge_requests"
+                if pr_number:
+                    url = f"{repository.scheme}://{repository.netloc}/api/v4/projects/{project}/merge_requests/{pr_number}"
                 headers = {"PRIVATE-TOKEN": token}
             else:
                 sys.exit(f"ERROR: Unsupported Git platform: {host}")
@@ -105,6 +114,8 @@ spec:
                 context = ssl._create_unverified_context()
                 with urllib.request.urlopen(request, context=context, timeout=30) as response:
                     requests = json.loads(response.read())
+                if pr_number:
+                    requests = [requests]
                 for item in requests:
                     if platform == "github":
                         labels = [entry["name"] for entry in (item.get("labels") or [])]
