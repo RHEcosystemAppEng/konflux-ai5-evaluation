@@ -94,12 +94,12 @@ spec:
               echo "Namespace created successfully with correct labels"
 
               echo "Verifying RoleBinding in namespace: ${NAMESPACE_NAME}"
-              if ! kubectl get rolebinding mcp-eval-ephemeral-access -n "${NAMESPACE_NAME}"; then
-                echo "FAIL: RoleBinding mcp-eval-ephemeral-access was not created"
+              if ! kubectl get rolebinding mcp-eval-ephemeral-access-cr -n "${NAMESPACE_NAME}"; then
+                echo "FAIL: RoleBinding mcp-eval-ephemeral-access-cr was not created"
                 exit 1
               fi
-              ROLE_REF=$(kubectl get rolebinding mcp-eval-ephemeral-access -n "${NAMESPACE_NAME}" -o jsonpath='{.roleRef.name}')
-              if [ "$ROLE_REF" != "mcp-eval-ephemeral-access" ]; then
+              ROLE_REF=$(kubectl get rolebinding mcp-eval-ephemeral-access-cr -n "${NAMESPACE_NAME}" -o jsonpath='{.roleRef.name}')
+              if [ "$ROLE_REF" != "mcp-eval-ephemeral-access-cr" ]; then
                 echo "FAIL: RoleBinding references wrong ClusterRole, got: ${ROLE_REF}"
                 exit 1
               fi

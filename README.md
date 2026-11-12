@@ -35,7 +35,10 @@ Every task's own `README.md` documents its full Parameters/Results/
 Workspaces/**Secrets** tables and a copy-pasteable usage snippet. See
 [docs/examples/skills-evaluation-usage.md](docs/examples/skills-evaluation-usage.md)
 for how the tasks compose together in a real pipeline (the exact wiring
-agentic-plugins itself uses).
+agentic-plugins itself uses). See
+[docs/examples/mcp-evaluation-usage.md](docs/examples/mcp-evaluation-usage.md)
+for how the MCP server evaluation tasks compose into a deployment +
+evaluation + reporting pipeline.
 
 ## Reusability scope
 

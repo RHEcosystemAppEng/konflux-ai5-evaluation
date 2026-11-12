@@ -23,7 +23,7 @@ spec:
         currently disabled and this parameter is not used.
     - name: pipeline-sa-name
       type: string
-      default: "mcp-eval-pipeline"
+      default: "mcp-eval-pipeline-sa"
       description: >-
         ServiceAccount name in the pipeline namespace to grant access
         in the ephemeral namespace via RoleBinding.
@@ -80,14 +80,14 @@ spec:
         apiVersion: rbac.authorization.k8s.io/v1
         kind: RoleBinding
         metadata:
-          name: mcp-eval-ephemeral-access
+          name: mcp-eval-ephemeral-access-cr
           labels:
             app.kubernetes.io/part-of: abevalflow
             app.kubernetes.io/name: mcp-eval
         roleRef:
           apiGroup: rbac.authorization.k8s.io
           kind: ClusterRole
-          name: mcp-eval-ephemeral-access
+          name: mcp-eval-ephemeral-access-cr
         subjects:
           - kind: ServiceAccount
             name: $PIPELINE_SA_NAME

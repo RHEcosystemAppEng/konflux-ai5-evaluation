@@ -1,14 +1,14 @@
 #!/bin/bash
 # Grants the appstudio-pipeline SA cluster-level permissions needed by
 # create-namespace: creating namespaces and rolebindings. Also creates
-# the mcp-eval-ephemeral-access ClusterRole that the task references
+# the mcp-eval-ephemeral-access-cr ClusterRole that the task references
 # when granting the pipeline SA access inside the new namespace.
 set -e
 
 TEST_NS="$2"
 
 # ClusterRole: namespace management (create, get, apply namespaces + rolebindings)
-# plus bind permission for mcp-eval-ephemeral-access to avoid RBAC escalation
+# plus bind permission for mcp-eval-ephemeral-access-cr to avoid RBAC escalation
 kubectl apply -f - <<'EOF'
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -22,7 +22,7 @@ rules:
     resources: ["rolebindings"]
     verbs: ["get", "list", "create", "update", "patch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resourceNames: ["mcp-eval-ephemeral-access"]
+    resourceNames: ["mcp-eval-ephemeral-access-cr"]
     resources: ["clusterroles"]
     verbs: ["bind"]
 EOF
@@ -49,7 +49,7 @@ kubectl apply -f - <<'EOF'
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: mcp-eval-ephemeral-access
+  name: mcp-eval-ephemeral-access-cr
 rules:
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps", "serviceaccounts", "persistentvolumeclaims"]

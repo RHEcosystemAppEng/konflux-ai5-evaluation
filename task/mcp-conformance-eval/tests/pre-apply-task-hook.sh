@@ -19,7 +19,7 @@ rules:
     resources: ["rolebindings"]
     verbs: ["get", "list", "create", "update", "patch"]
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resourceNames: ["mcp-eval-ephemeral-access"]
+    resourceNames: ["mcp-eval-ephemeral-access-cr"]
     resources: ["clusterroles"]
     verbs: ["bind"]
 EOF
@@ -69,7 +69,7 @@ kubectl apply -f - <<'EOF'
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: mcp-eval-ephemeral-access
+  name: mcp-eval-ephemeral-access-cr
 rules:
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps", "serviceaccounts", "persistentvolumeclaims"]
