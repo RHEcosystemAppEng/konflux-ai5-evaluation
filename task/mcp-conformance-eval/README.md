@@ -13,7 +13,6 @@ probes as a Kubernetes Job on the target cluster.
 | namespace-name | Ephemeral namespace where MCP server is deployed | | true |
 | service-name | K8s Service name of deployed MCP server | `mcp-server` | false |
 | service-port | Port MCP server listens on | `8080` | false |
-| mode | Gate enforcement mode -- block, warn, or disabled | `block` | false |
 | timeout | Per-request HTTP timeout (seconds) | `30` | false |
 | job-timeout | Timeout for probe Job (seconds) | `300` | false |
 | openapi-url | Explicit OpenAPI contract URL | `""` | false |

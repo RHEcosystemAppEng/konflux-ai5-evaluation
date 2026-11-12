@@ -27,7 +27,7 @@ SCAN_FILENAME = "secrets-scan.json"
 SCANNER = "gitleaks"
 
 # gitleaks has no severity field; every hit is a candidate hardcoded credential,
-# so all findings are HIGH (the gate blocks on HIGH/CRITICAL in block mode).
+# so all findings are HIGH and logged in the results.
 
 
 def normalize(gitleaks_findings: list[dict]) -> list[dict]:
