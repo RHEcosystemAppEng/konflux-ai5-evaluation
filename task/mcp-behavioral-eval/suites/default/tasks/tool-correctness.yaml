@@ -33,9 +33,9 @@ spec:
   verify:
     - llmJudge:
         contains: |
-          All discovered tools were invoked with valid inputs.
-          The agent successfully:
-          1. Listed the available tools on the MCP server
-          2. Attempted to invoke each discovered tool at least once
-          3. Provided inputs that match each tool's declared input schema
-          4. Reported the result of each tool invocation
+          Based on the agent's report:
+          1. The server exposed a list of all its available tools
+          2. Each discovered tool was invoked at least once with valid inputs
+          3. Tools returned successful responses, not errors, for valid inputs
+          4. Responses contained meaningful data relevant to the tool's purpose
+          5. No tool call resulted in a crash, hang, or connection error
