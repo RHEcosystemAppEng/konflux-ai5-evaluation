@@ -1,4 +1,4 @@
-entity_namespace: "component:ai5-marketplace"
+entity_namespace: "mcpserver:ai5-marketplace"
 
 phases:
   static-eval:
