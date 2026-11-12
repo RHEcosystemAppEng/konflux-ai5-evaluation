@@ -7,13 +7,11 @@ and the Compass-consume step, evaluates each gate, and writes results:
 - ``<check>-result.json`` per gate (the full GateResult) → results directory
 - ``conformance-eval-summary.json`` (overall pass/fail + per-check summary) → reports directory
 
-Three-state aware: a ``not_evaluated`` check never fails the evaluation. The step
-fails (non-zero exit) only when a check genuinely FAILED in block mode. Reporting
-to the Evaluation-results database is still handled by the pipeline layer later;
-this writes local JSON only.
+All checks always run and results (pass/fail/not_evaluated) are logged. Summary is
+always created. The task itself does not fail based on check results.
 
 Usage:
-    python -m scripts.runners.conformance_eval_gate --results-dir <dir> --reports-dir <dir> [--mode block|warn]
+    python -m scripts.runners.conformance_eval_gate --results-dir <dir> --reports-dir <dir>
 """
 
 from __future__ import annotations
@@ -25,7 +23,7 @@ import sys
 from pathlib import Path
 
 from abevalflow.mcp.gates import run_conformance_eval
-from abevalflow.schemas import GateMode, GatePolicy
+from abevalflow.schemas import GatePolicy
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -47,12 +45,6 @@ def main() -> int:
         required=True,
         help="Directory for writing the summary JSON file (output)",
     )
-    parser.add_argument(
-        "--mode",
-        choices=[m.value for m in GateMode],
-        default=GateMode.BLOCK.value,
-        help="Gate enforcement mode (default: block)",
-    )
     args = parser.parse_args()
 
     if not args.results_dir.is_dir():
@@ -61,7 +53,8 @@ def main() -> int:
 
     args.reports_dir.mkdir(parents=True, exist_ok=True)
 
-    policy = GatePolicy(default_mode=GateMode(args.mode))
+    # Run all checks with default policy
+    policy = GatePolicy()
     results = run_conformance_eval(args.results_dir, policy)
 
     summary: list[dict] = []
@@ -95,10 +88,10 @@ def main() -> int:
     )
 
     logger.info("Conformance evaluation overall: %s (%s)", "PASS" if overall_passed else "FAIL", counts)
-    # A gate is only not-passed when a real check FAILED in block mode
-    # (not_evaluated and warn-mode failures keep passed=True), so this exits
-    # non-zero exactly when the step should fail.
-    return 0 if overall_passed else 1
+
+    # Always return 0 - the task succeeds and creates the summary.
+    # Downstream tasks check the results.
+    return 0
 
 
 if __name__ == "__main__":

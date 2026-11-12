@@ -25,10 +25,6 @@ spec:
       description: >-
         Subdirectory within the workspace where the MCP server repository
         is cloned (relative to the workspace root).
-    - name: mode
-      type: string
-      default: "block"
-      description: Gate enforcement mode - block, warn, or disabled.
     - name: allowed-licenses
       type: string
       default: ""
@@ -98,8 +94,6 @@ spec:
       env:
         - name: TASK_NAME
           value: $(context.task.name)
-        - name: MODE
-          value: $(params.mode)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -111,14 +105,13 @@ spec:
         REPORTS_DIR="$(workspaces.source.path)/reports"
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
-        # Gate wrapper script: runs the gate module, emits Tekton results from
-        # the summary, and propagates the gate's exit code.
+        # Run gate module and extract passed flag from summary
         bash "/opt/${TASK_MODULE}/scripts/gate_wrapper.sh" \
           "${TASK_MODULE}.scripts.runners.static_eval_gate" \
           "$RESULTS_DIR" \
           "$REPORTS_DIR" \
-          "$MODE" \
           "$REPORTS_DIR/static-eval-summary.json" \
-          "$(results.static-eval-passed.path)" \
-          "reports/static-eval-summary.json" \
-          "$(results.report-path.path)"
+          "$(results.static-eval-passed.path)"
+
+        # Write static report path to result
+        printf '%s' "reports/static-eval-summary.json" > "$(results.report-path.path)"

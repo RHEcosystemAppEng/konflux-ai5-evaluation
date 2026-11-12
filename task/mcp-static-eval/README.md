@@ -11,7 +11,6 @@ no deployment required.
 |---|---|---|---|
 | mcp-eval-image | MCP eval image with scanners and pipeline code | `quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1` | false |
 | source-subdir | Path of MCP server source within workspace to scan | `mcp-server-repo` | false |
-| mode | Gate enforcement mode -- block, warn, or disabled | `block` | false |
 | allowed-licenses | Space-separated approved SPDX ids overriding built-in allow-list | `""` | false |
 
 ## Results

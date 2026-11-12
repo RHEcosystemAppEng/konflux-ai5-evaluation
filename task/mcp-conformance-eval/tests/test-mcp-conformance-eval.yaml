@@ -1,7 +1,8 @@
 # Tests the conformance eval task by deploying a simple HTTP server and
 # verifying the probe Job runs. The probes will likely report not_evaluated
 # since it's not a real MCP server, but this tests Job creation, execution,
-# and result collection logic.
+# result collection, and summary generation. All checks run and results are
+# logged; the task always completes and creates a summary.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -163,8 +164,6 @@ spec:
           value: "mock-mcp-server"
         - name: service-port
           value: "8080"
-        - name: mode
-          value: "warn"
         - name: timeout
           value: "10"
         - name: job-timeout

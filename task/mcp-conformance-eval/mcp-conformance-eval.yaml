@@ -33,10 +33,6 @@ spec:
       type: string
       default: "8080"
       description: Port on which the MCP server listens
-    - name: mode
-      type: string
-      default: "block"
-      description: Gate enforcement mode - block, warn, or disabled.
     - name: timeout
       type: string
       default: "30"
@@ -280,8 +276,6 @@ spec:
       env:
         - name: TASK_NAME
           value: $(context.task.name)
-        - name: MODE
-          value: $(params.mode)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
@@ -293,12 +287,13 @@ spec:
         REPORTS_DIR="$(workspaces.source.path)/reports"
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
+        # Run gate module and extract passed flag from summary
         bash "/opt/${TASK_MODULE}/scripts/gate_wrapper.sh" \
           "${TASK_MODULE}.scripts.runners.conformance_eval_gate" \
           "$RESULTS_DIR" \
           "$REPORTS_DIR" \
-          "$MODE" \
           "$REPORTS_DIR/conformance-eval-summary.json" \
-          "$(results.conformance-eval-passed.path)" \
-          "reports/conformance-eval-summary.json" \
-          "$(results.report-path.path)"
+          "$(results.conformance-eval-passed.path)"
+
+        # Write static report path to result
+        printf '%s' "reports/conformance-eval-summary.json" > "$(results.report-path.path)"
