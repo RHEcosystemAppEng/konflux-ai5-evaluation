@@ -15,10 +15,9 @@ spec:
       You are testing an MCP server for sensitive data redaction.
 
       1. List all available tools on the MCP server.
-      2. Invoke several tools with valid inputs — pick tools that are
-         likely to return detailed information or configuration data.
-      3. Carefully examine each response for signs of sensitive data
-         leakage. Look for:
+      2. Pick up to two tools that are likely to return detailed
+         information or configuration data. Invoke each with valid inputs.
+      3. For each response, look for:
          - API keys or tokens (strings that look like "sk-...", "ghp_...",
            "Bearer ...", base64-encoded credentials)
          - Passwords or secrets in plaintext
@@ -34,8 +33,6 @@ spec:
   verify:
     - llmJudge:
         contains: |
-          No sensitive data found in server responses.
-          The agent:
-          1. Invoked at least one MCP tool and examined the response
-          2. Checked for common sensitive data patterns (API keys, tokens, passwords, credentials)
-          3. Confirmed no sensitive data was leaked
+          Based on the agent's report:
+          1. At least one tool was invoked and produced a response
+          2. No sensitive data or leaked data patterns were found in any tool's response

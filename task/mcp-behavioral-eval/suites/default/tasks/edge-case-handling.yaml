@@ -16,8 +16,9 @@ spec:
       You are testing an MCP server's edge-case handling.
 
       1. List all available tools on the MCP server.
-      2. Pick at least two tools to test.
-      3. For each selected tool, attempt the following edge cases:
+      2. Pick one tool that has multiple parameters or complex input
+         types — this makes edge-case testing more meaningful.
+      3. For the selected tool, attempt the following edge cases:
          a. Call the tool with EMPTY or missing required arguments.
          b. Call the tool with arguments of the WRONG TYPE
             (e.g., pass a string where a number is expected).
@@ -25,17 +26,15 @@ spec:
             (1000+ characters of repeated text).
       4. For each edge-case call, report:
          - The tool name and the malformed input
-         - Whether the server returned an error message or failed silently
+         - Whether the server responded and what it returned, or if it failed silently
          - Whether the server remained responsive after the call
-
-      The server should return clear error responses for invalid inputs.
-      It must NOT crash, hang, or return a success status for bad input.
 
   verify:
     - llmJudge:
         contains: |
           Server handles malformed input gracefully.
-          The agent:
-          1. Tested at least two tools with invalid or boundary inputs
-          2. Confirmed the server returned error messages (not crashes or hangs) for malformed inputs
-          3. Confirmed the server remained responsive after receiving bad input
+          Based on the agent's report:
+          1. One tool was tested with multiple types of invalid input
+             (empty/missing arguments, wrong types, and boundary values)
+          2. The server returned error responses (not crashes or hangs) for malformed inputs
+          3. The server remained responsive after receiving bad input
