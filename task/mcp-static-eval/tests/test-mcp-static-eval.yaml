@@ -1,6 +1,5 @@
-# Tests with mode="disabled" and a minimal clean git repo. When mode is
-# disabled, the gate should pass even though scans run, with
-# static-eval-passed=true. This verifies the mode enforcement logic.
+# Tests for mcp-static-eval task. All checks always run and results are logged.
+# Summary is always created. Task does not fail based on check results.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -74,7 +73,7 @@ spec:
         - name: source
           workspace: tests-workspace
 
-    - name: run-disabled-mode
+    - name: run-clean-repo
       runAfter:
         - setup-clean-repo
       taskRef:
@@ -82,15 +81,13 @@ spec:
       params:
         - name: source-subdir
           value: "clean-repo"
-        - name: mode
-          value: "disabled"
         - name: allowed-licenses
           value: ""
       workspaces:
         - name: source
           workspace: tests-workspace
 
-    - name: run-disabled-mode-with-violations
+    - name: run-with-violations
       runAfter:
         - setup-violations-repo
       taskRef:
@@ -98,329 +95,128 @@ spec:
       params:
         - name: source-subdir
           value: "violations-repo"
-        - name: mode
-          value: "disabled"
         - name: allowed-licenses
           value: ""
       workspaces:
         - name: source
           workspace: tests-workspace
 
-    - name: run-warn-mode-with-violations
+    - name: verify-clean-repo
       runAfter:
-        - setup-violations-repo
-      taskRef:
-        name: mcp-static-eval
+        - run-clean-repo
       params:
-        - name: source-subdir
-          value: "violations-repo"
-        - name: mode
-          value: "warn"
-        - name: allowed-licenses
-          value: ""
+        - name: STATIC_EVAL_PASSED
+          value: $(tasks.run-clean-repo.results.static-eval-passed)
+        - name: REPORT_PATH
+          value: $(tasks.run-clean-repo.results.report-path)
       workspaces:
         - name: source
           workspace: tests-workspace
-
-    - name: run-block-mode-with-violations
-      runAfter:
-        - setup-violations-repo
-      onError: continue
-      taskRef:
-        name: mcp-static-eval
-      params:
-        - name: source-subdir
-          value: "violations-repo"
-        - name: mode
-          value: "block"
-        - name: allowed-licenses
-          value: ""
-      workspaces:
-        - name: source
-          workspace: tests-workspace
-
-    - name: verify-disabled-mode
-      runAfter:
-        - run-disabled-mode
-      params:
-        - name: static-eval-passed
-          value: $(tasks.run-disabled-mode.results.static-eval-passed)
-        - name: report-path
-          value: $(tasks.run-disabled-mode.results.report-path)
       taskSpec:
         params:
-          - name: static-eval-passed
-            type: string
-          - name: report-path
-            type: string
+          - name: STATIC_EVAL_PASSED
+          - name: REPORT_PATH
         workspaces:
           - name: source
         steps:
-          - name: check-passed
+          - name: check-clean-repo-passed
             image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
-            env:
-              - name: STATIC_EVAL_PASSED
-                value: $(params.static-eval-passed)
-              - name: REPORT_PATH
-                value: $(params.report-path)
             script: |
               #!/bin/bash
               set -e
-              echo "static-eval-passed=${STATIC_EVAL_PASSED}"
-              echo "report-path=${REPORT_PATH}"
+              echo "=== Verifying clean repo results ==="
 
-              # Verify task passed in disabled mode
-              # (The fact this verification task is running proves the previous task succeeded)
+              STATIC_EVAL_PASSED="$(params.STATIC_EVAL_PASSED)"
+              REPORT_PATH="$(params.REPORT_PATH)"
+
+              # Verify task passed for clean repo
               if [ "$STATIC_EVAL_PASSED" != "true" ]; then
-                echo "FAIL: expected static-eval-passed=true when mode=disabled, got '${STATIC_EVAL_PASSED}'"
+                echo "FAIL: expected static-eval-passed=true for clean repo, got '$STATIC_EVAL_PASSED'"
                 exit 1
               fi
-              echo "✓ Task passed in disabled mode"
+              echo "✓ Task passed for clean repo"
 
-              # Verify summary file was created (report-path is the full path to summary file)
-              SUMMARY_FILE="$(workspaces.source.path)/${REPORT_PATH}"
-              if [ ! -f "$SUMMARY_FILE" ]; then
-                echo "FAIL: Summary file not found at $SUMMARY_FILE"
+              # Verify report exists
+              SUMMARY="$(workspaces.source.path)/$REPORT_PATH"
+              if [ ! -f "$SUMMARY" ]; then
+                echo "FAIL: Summary file not found at $SUMMARY"
                 exit 1
               fi
-              echo "✓ Summary file created: $SUMMARY_FILE"
+              echo "✓ Summary file created"
 
-              # Verify report directory exists
-              REPORT_DIR=$(dirname "$SUMMARY_FILE")
-              if [ ! -d "$REPORT_DIR" ]; then
-                echo "FAIL: Report directory not found at $REPORT_DIR"
-                exit 1
-              fi
-              echo "✓ Report directory exists: $REPORT_DIR"
+              # Verify all checks passed
+              microdnf install -y python3 --nodocs 2>/dev/null
+              python3 <<'PYEOF'
+              import json, sys
+              with open("$SUMMARY") as f:
+                  summary = json.load(f)
+              checks = summary.get("checks", [])
+              if not all(c.get("passed", False) for c in checks):
+                  print("FAIL: Expected all checks to pass for clean repo")
+                  print(json.dumps(summary, indent=2))
+                  sys.exit(1)
+              print(f"✓ All {len(checks)} checks passed")
+              PYEOF
 
-              # Verify scanners actually ran and created result files
-              RESULTS_DIR="$(workspaces.source.path)/results"
-              if [ ! -d "$RESULTS_DIR" ]; then
-                echo "FAIL: Results directory not found at $RESULTS_DIR"
-                exit 1
-              fi
+              echo "mcp-static-eval: clean repo test passed"
 
-              # Check for scanner output files (gitleaks, semgrep, licensee)
-              # Count files using ls (find not available in ubi-minimal)
-              # shellcheck disable=SC2012
-              RESULT_COUNT=$(ls -1 "$RESULTS_DIR"/*.json "$RESULTS_DIR"/*.txt 2>/dev/null | wc -l)
-              if [ "$RESULT_COUNT" -eq 0 ]; then
-                echo "FAIL: No scanner result files found in $RESULTS_DIR"
-                exit 1
-              fi
-              echo "✓ Found $RESULT_COUNT scanner result files"
-
-              echo "mcp-static-eval: scanners executed and reports generated successfully"
-      workspaces:
-        - name: source
-          workspace: tests-workspace
-
-    - name: verify-disabled-mode-ignores-violations
+    - name: verify-violations-repo
       runAfter:
-        - run-disabled-mode-with-violations
+        - run-with-violations
       params:
-        - name: static-eval-passed
-          value: $(tasks.run-disabled-mode-with-violations.results.static-eval-passed)
-        - name: report-path
-          value: $(tasks.run-disabled-mode-with-violations.results.report-path)
-      taskSpec:
-        params:
-          - name: static-eval-passed
-            type: string
-          - name: report-path
-            type: string
-        workspaces:
-          - name: source
-        steps:
-          - name: check-violations-ignored
-            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
-            env:
-              - name: STATIC_EVAL_PASSED
-                value: $(params.static-eval-passed)
-              - name: REPORT_PATH
-                value: $(params.report-path)
-            script: |
-              #!/bin/bash
-              set -e
-              echo "=== Verifying disabled mode ignores violations ==="
-              echo "static-eval-passed=${STATIC_EVAL_PASSED}"
-              echo "report-path=${REPORT_PATH}"
-
-              # Verify task passed despite violations
-              # (The fact this verification task is running proves the previous task succeeded)
-              if [ "$STATIC_EVAL_PASSED" != "true" ]; then
-                echo "FAIL: expected static-eval-passed=true in disabled mode, got '${STATIC_EVAL_PASSED}'"
-                exit 1
-              fi
-              echo "✓ Task passed in disabled mode despite violations"
-
-              # Verify summary file exists
-              SUMMARY_FILE="$(workspaces.source.path)/${REPORT_PATH}"
-              if [ ! -f "$SUMMARY_FILE" ]; then
-                echo "FAIL: Summary file not found at $SUMMARY_FILE"
-                exit 1
-              fi
-              echo "✓ Summary file created: $SUMMARY_FILE"
-
-              # In disabled mode: task passes but violations should still be detected in checks[]
-              # This proves scanners ran but violations were ignored
-              microdnf install -y jq --nodocs 2>/dev/null || true
-              if command -v jq &> /dev/null; then
-                # Check if any individual checks detected violations
-                FAILED_CHECKS=$(jq -r '[.checks[] | select(.passed == false)] | length' "$SUMMARY_FILE" 2>/dev/null || echo "0")
-                echo "Failed checks detected: ${FAILED_CHECKS}"
-                if [ "$FAILED_CHECKS" -gt 0 ]; then
-                  echo "✓ Violations were detected but ignored in disabled mode"
-                else
-                  echo "WARNING: Expected some checks to fail with violations in violations-repo"
-                fi
-              else
-                echo "INFO: jq not available, skipping checks[] validation"
-              fi
-
-              # Show summary content for debugging
-              echo "=== Summary contents ==="
-              cat "$SUMMARY_FILE" || true
-
-              echo "mcp-static-eval: disabled mode correctly ignores violations"
+        - name: STATIC_EVAL_PASSED
+          value: $(tasks.run-with-violations.results.static-eval-passed)
+        - name: REPORT_PATH
+          value: $(tasks.run-with-violations.results.report-path)
       workspaces:
         - name: source
           workspace: tests-workspace
-
-    - name: verify-warn-mode
-      runAfter:
-        - run-warn-mode-with-violations
-      params:
-        - name: static-eval-passed
-          value: $(tasks.run-warn-mode-with-violations.results.static-eval-passed)
-        - name: report-path
-          value: $(tasks.run-warn-mode-with-violations.results.report-path)
       taskSpec:
         params:
-          - name: static-eval-passed
-            type: string
-          - name: report-path
-            type: string
+          - name: STATIC_EVAL_PASSED
+          - name: REPORT_PATH
         workspaces:
           - name: source
         steps:
-          - name: check-warn-mode
+          - name: check-violations-detected
             image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
-            env:
-              - name: STATIC_EVAL_PASSED
-                value: $(params.static-eval-passed)
-              - name: REPORT_PATH
-                value: $(params.report-path)
             script: |
               #!/bin/bash
               set -e
-              echo "=== Verifying warn mode behavior ==="
-              echo "static-eval-passed=${STATIC_EVAL_PASSED}"
-              echo "report-path=${REPORT_PATH}"
+              echo "=== Verifying violations repo results ==="
 
-              # Verify task passed despite violations
-              # (The fact this verification task is running proves the previous task succeeded)
-              if [ "$STATIC_EVAL_PASSED" != "true" ]; then
-                echo "FAIL: expected static-eval-passed=true in warn mode, got '${STATIC_EVAL_PASSED}'"
+              STATIC_EVAL_PASSED="$(params.STATIC_EVAL_PASSED)"
+              REPORT_PATH="$(params.REPORT_PATH)"
+
+              # Task always completes and creates summary
+              echo "Task completed with static-eval-passed=$STATIC_EVAL_PASSED"
+
+              # Verify report exists
+              SUMMARY="$(workspaces.source.path)/$REPORT_PATH"
+              if [ ! -f "$SUMMARY" ]; then
+                echo "FAIL: Summary file not found at $SUMMARY"
                 exit 1
               fi
-              echo "✓ Task passed in warn mode"
+              echo "✓ Summary file created"
 
-              # Verify summary file exists
-              SUMMARY_FILE="$(workspaces.source.path)/${REPORT_PATH}"
-              if [ ! -f "$SUMMARY_FILE" ]; then
-                echo "FAIL: Summary file not found at $SUMMARY_FILE"
-                exit 1
-              fi
-              echo "✓ Summary file created: $SUMMARY_FILE"
+              # Verify violations were detected
+              microdnf install -y python3 --nodocs 2>/dev/null
+              python3 <<'PYEOF'
+              import json, sys
+              with open("$SUMMARY") as f:
+                  summary = json.load(f)
 
-              # In warn mode: task passes but individual checks should show violations detected
-              microdnf install -y jq --nodocs 2>/dev/null || true
-              if command -v jq &> /dev/null; then
-                # Check if any individual checks detected violations
-                FAILED_CHECKS=$(jq -r '[.checks[] | select(.passed == false)] | length' "$SUMMARY_FILE" 2>/dev/null || echo "0")
-                echo "Failed checks detected: ${FAILED_CHECKS}"
-                if [ "$FAILED_CHECKS" -gt 0 ]; then
-                  echo "✓ Individual checks correctly detected violations in warn mode"
-                else
-                  echo "WARNING: Expected some checks to fail with violations in violations-repo"
-                fi
-              else
-                echo "INFO: jq not available, skipping summary JSON validation"
-              fi
+              checks = summary.get("checks", [])
+              failed_checks = [c for c in checks if not c.get("passed", False)]
 
-              # Show summary content for debugging
-              echo "=== Summary contents ==="
-              cat "$SUMMARY_FILE" || true
+              if len(failed_checks) == 0:
+                  print("FAIL: Expected some checks to fail for violations repo")
+                  print(json.dumps(summary, indent=2))
+                  sys.exit(1)
 
-              echo "mcp-static-eval: warn mode correctly passes with violations reported"
-      workspaces:
-        - name: source
-          workspace: tests-workspace
+              print(f"✓ {len(failed_checks)} check(s) detected violations as expected")
+              for check in failed_checks:
+                  print(f"  - {check.get('check')}: {check.get('findings', 0)} findings")
+              PYEOF
 
-  finally:
-    - name: verify-block-mode
-      taskSpec:
-        params:
-          - name: task-status
-            type: string
-        workspaces:
-          - name: source
-        steps:
-          - name: check-block-mode
-            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
-            env:
-              - name: TASK_STATUS
-                value: $(params.task-status)
-            script: |
-              #!/bin/bash
-              set -e
-              echo "=== Verifying block mode behavior ==="
-              echo "Task status: ${TASK_STATUS}"
-
-              # In block mode with violations, the task should have FAILED
-              # onError: continue allows the pipeline to continue
-              if [ "$TASK_STATUS" = "Failed" ] || [ "$TASK_STATUS" = "failed" ]; then
-                echo "✓ Task correctly failed in block mode with violations"
-
-                # Verify summary file exists and contains violations
-                REPORT_PATH="$(workspaces.source.path)/reports/static-eval-summary.json"
-                if [ -f "$REPORT_PATH" ]; then
-                  echo "✓ Summary file created: $REPORT_PATH"
-
-                  # Verify violations were detected in checks[]
-                  microdnf install -y jq --nodocs 2>/dev/null || true
-                  if command -v jq &> /dev/null; then
-                    FAILED_CHECKS=$(jq -r '[.checks[] | select(.passed == false)] | length' "$REPORT_PATH" 2>/dev/null || echo "0")
-                    echo "Failed checks detected: ${FAILED_CHECKS}"
-                    if [ "$FAILED_CHECKS" -gt 0 ]; then
-                      echo "✓ Violations detected in summary (caused task to fail)"
-                    else
-                      echo "WARNING: Expected violations in summary for failed task"
-                    fi
-                  fi
-
-                  # Show summary content for debugging
-                  echo "=== Summary contents ==="
-                  cat "$REPORT_PATH" || true
-                else
-                  echo "WARNING: Summary file not found at $REPORT_PATH"
-                fi
-              else
-                echo "Checking for reports to diagnose unexpected pass..."
-                REPORT_PATH="$(workspaces.source.path)/reports/static-eval-summary.json"
-                if [ -f "$REPORT_PATH" ]; then
-                  echo "Summary file found:"
-                  cat "$REPORT_PATH" || true
-                fi
-                echo "WARNING: Expected task to fail in block mode with violations"
-                echo "This test will still pass to avoid blocking CI, but block mode may not be working correctly"
-              fi
-
-              echo "mcp-static-eval: block mode test completed"
-      params:
-        - name: task-status
-          value: "$(tasks.run-block-mode-with-violations.status)"
-      workspaces:
-        - name: source
-          workspace: tests-workspace
+              echo "mcp-static-eval: violations detection test passed"

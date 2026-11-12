@@ -164,8 +164,8 @@ def main() -> int:
     if coverage["files_scanned"] == 0 and coverage["target_files_total"] > 0:
         # Zero files scanned in a non-empty artifact means it is written in a language
         # the ruleset does not cover, so a zero-finding result proves nothing. Fail
-        # closed: emit a HIGH finding so a blocking gate blocks (and warn mode warns)
-        # instead of granting a silent PASS that bypasses the no-user-code control.
+        # closed: emit a HIGH finding instead of granting a silent PASS that bypasses
+        # the no-user-code control.
         logger.warning(
             "no-user-code: semgrep scanned 0 files in a covered language (%d files in artifact); "
             "flagging - cannot verify the server avoids user-code execution",

@@ -7,11 +7,11 @@ each gate, and writes results:
 - ``<gate>-result.json`` per gate (the full GateResult) → results directory
 - ``static-eval-summary.json`` (overall pass/fail + per-gate summary) → reports directory
 
-Reporting stub: the three-state Evaluation-results-database writer is added by the
-pipeline layer later; static evaluation checks are pass/fail only.
+All checks always run and results (pass/fail) are logged. Summary is always created.
+The task itself does not fail based on check results.
 
 Usage:
-    python -m scripts.runners.static_eval_gate --results-dir <dir> --reports-dir <dir> [--mode block|warn]
+    python -m scripts.runners.static_eval_gate --results-dir <dir> --reports-dir <dir>
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 from abevalflow.mcp.gates import run_static_eval
-from abevalflow.schemas import GateMode, GatePolicy
+from abevalflow.schemas import GatePolicy
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -45,12 +45,6 @@ def main() -> int:
         required=True,
         help="Directory for writing the summary JSON file (output)",
     )
-    parser.add_argument(
-        "--mode",
-        choices=[m.value for m in GateMode],
-        default=GateMode.BLOCK.value,
-        help="Gate enforcement mode (default: block)",
-    )
     args = parser.parse_args()
 
     if not args.results_dir.is_dir():
@@ -59,7 +53,8 @@ def main() -> int:
 
     args.reports_dir.mkdir(parents=True, exist_ok=True)
 
-    policy = GatePolicy(default_mode=GateMode(args.mode))
+    # Run all checks with default policy
+    policy = GatePolicy()
     results = run_static_eval(args.results_dir, policy)
 
     summary: list[dict] = []
@@ -85,22 +80,17 @@ def main() -> int:
 
     overall_passed = all(r.passed for r in results)
 
-    # In disabled/warn modes, the task always passes even if gates failed.
-    # The summary 'passed' field becomes the Tekton result value.
-    mode_enum = GateMode(args.mode)
-    task_passed = overall_passed or mode_enum in (GateMode.WARN, GateMode.DISABLED)
-
     (args.reports_dir / SUMMARY_FILENAME).write_text(
         json.dumps(
-            {"phase": "static-eval", "passed": task_passed, "checks": summary},
+            {"phase": "static-eval", "passed": overall_passed, "checks": summary},
             indent=2,
         )
     )
 
     logger.info("Static evaluation overall: %s", "PASS" if overall_passed else "FAIL")
-    # Exit non-zero in block mode when any gate failed, so the Tekton step fails.
-    if not overall_passed and mode_enum == GateMode.BLOCK:
-        return 1
+
+    # Always return 0 - the task succeeds and creates the summary.
+    # Downstream tasks check the results.
     return 0
 
 
