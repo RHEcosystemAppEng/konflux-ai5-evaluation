@@ -26,7 +26,7 @@ spec:
       description: Port on which the MCP server listens
     - name: job-timeout
       type: string
-      default: "1800"
+      default: "7200"
       description: Timeout in seconds for the mcpchecker Job
     - name: llm-agent-secret
       type: string
