@@ -221,16 +221,15 @@ spec:
         fi
 
         # shellcheck disable=SC2153  # IMAGE_KEY, IMAGE_REF_KEY, IMAGE_PULL_SECRET_HELM_KEY are env vars
-        HELM_SETS="--set ${IMAGE_KEY}=${IMAGE_REPO} --set ${IMAGE_REF_KEY}=${IMAGE_REF} --set ${IMAGE_PULL_SECRET_HELM_KEY}=${IMAGE_PULL_SECRET}"
+        HELM_SETS=(--set "${IMAGE_KEY}=${IMAGE_REPO}" --set "${IMAGE_REF_KEY}=${IMAGE_REF}" --set "${IMAGE_PULL_SECRET_HELM_KEY}=${IMAGE_PULL_SECRET}")
         echo "Image override: repo=${IMAGE_REPO} ref=${IMAGE_REF}"
         echo "Image pull secret: ${IMAGE_PULL_SECRET}"
 
         echo "Deploying Helm release: $RELEASE_NAME"
-        # shellcheck disable=SC2086  # HELM_SETS must word-split into separate arguments
         helm upgrade --install "$RELEASE_NAME" "$HELM_CHART" \
           --namespace "$NAMESPACE" \
           --values "$VALUES_FILE" \
-          $HELM_SETS \
+          "${HELM_SETS[@]}" \
           --wait=false
 
         echo "Helm release deployed"
