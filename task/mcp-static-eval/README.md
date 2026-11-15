@@ -26,7 +26,17 @@ no deployment required.
 |---|---|
 | source | Contains the MCP server source to scan. |
 
+## Trusted Artifacts variant
+
+A generated OCI Trusted Artifacts variant (`mcp-static-eval-oci-ta`) is
+available. It replaces the `source` workspace with a `SOURCE_ARTIFACT`
+parameter, pulling the source from OCI instead of a PVC.  Use this
+variant in pipelines where a TA-aware git-clone task produces source as
+a Trusted Artifact.
+
 ## Usage
+
+### Workspace-based (base task)
 
 ```yaml
 - name: mcp-static-eval
@@ -45,4 +55,24 @@ no deployment required.
   workspaces:
   - name: source
     workspace: shared-workspace
+```
+
+### Trusted Artifacts (oci-ta variant)
+
+```yaml
+- name: mcp-static-eval
+  taskRef:
+    resolver: bundles
+    params:
+    - name: name
+      value: mcp-static-eval-oci-ta
+    - name: bundle
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-static-eval-oci-ta:0.1.0"
+    - name: kind
+      value: task
+  params:
+  - name: SOURCE_ARTIFACT
+    value: $(tasks.git-clone.results.SOURCE_ARTIFACT)
+  - name: source-subdir
+    value: "."
 ```

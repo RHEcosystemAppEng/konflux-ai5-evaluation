@@ -50,7 +50,17 @@ target test cluster.
 | `image-pull-secret` (default `image-pull-secret`) | Konflux pipeline namespace | Image pull credentials for the MCP server container image. |
 | `credentials-secrets` (comma-separated) | Konflux pipeline namespace | Additional credential Secrets (e.g. backend API keys) needed by the MCP server at runtime. |
 
+## Trusted Artifacts variant
+
+A generated OCI Trusted Artifacts variant (`deploy-mcp-oci-ta`) is
+available. It replaces the `source` workspace with a `SOURCE_ARTIFACT`
+parameter, pulling the source from OCI instead of a PVC.  Use this
+variant in pipelines where a TA-aware git-clone task produces source as
+a Trusted Artifact.
+
 ## Usage
+
+### Workspace-based (base task)
 
 ```yaml
 - name: deploy-mcp
@@ -72,6 +82,32 @@ target test cluster.
   workspaces:
   - name: source
     workspace: shared-workspace
+  - name: target-kubeconfig
+    workspace: target-kubeconfig
+```
+
+### Trusted Artifacts (oci-ta variant)
+
+```yaml
+- name: deploy-mcp
+  runAfter: [create-namespace]
+  taskRef:
+    resolver: bundles
+    params:
+    - name: name
+      value: deploy-mcp-oci-ta
+    - name: bundle
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/deploy-mcp-oci-ta:0.1.0"
+    - name: kind
+      value: task
+  params:
+  - name: SOURCE_ARTIFACT
+    value: $(tasks.git-clone.results.SOURCE_ARTIFACT)
+  - name: namespace-name
+    value: $(tasks.create-namespace.results.namespace-name)
+  - name: component-image
+    value: $(tasks.parse-snapshot.results.component-image)
+  workspaces:
   - name: target-kubeconfig
     workspace: target-kubeconfig
 ```
