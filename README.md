@@ -38,8 +38,10 @@ Mirrors must preserve the upstream merge commit SHA and target branch.
 | [parse-snapshot](task/parse-snapshot/README.md) | 0.1.0 | Parses a Konflux Snapshot JSON to extract component image, git URL, revision, and name |
 | [create-namespace](task/create-namespace/README.md) | 0.1.0 | Creates an ephemeral namespace on a remote cluster for MCP server evaluation |
 | [deploy-mcp](task/deploy-mcp/README.md) | 0.1.0 | Deploys an MCP server into the ephemeral namespace via Helm chart |
+| [deploy-mcp-oci-ta](task/deploy-mcp/README.md#trusted-artifacts-variant) | 0.1.0 | OCI Trusted Artifacts variant of deploy-mcp |
 | [wait-ready](task/wait-ready/README.md) | 0.1.0 | Waits for all Deployments/StatefulSets in the namespace to complete rollout |
 | [mcp-static-eval](task/mcp-static-eval/README.md) | 0.1.0 | Static checks (secrets, code execution, license) against MCP server source |
+| [mcp-static-eval-oci-ta](task/mcp-static-eval/README.md#trusted-artifacts-variant) | 0.1.0 | OCI Trusted Artifacts variant of mcp-static-eval |
 | [mcp-conformance-eval](task/mcp-conformance-eval/README.md) | 0.1.0 | Deterministic conformance probes against a deployed MCP server (no LLM) |
 | [mcp-behavioral-eval](task/mcp-behavioral-eval/README.md) | 0.1.0 | LLM-driven behavioral evaluation using mcpchecker against a deployed MCP server |
 | [generate-compass-facts](task/generate-compass-facts/README.md) | 0.1.0 | Generates Compass SoundCheck fact payloads from MCP evaluation summaries |
