@@ -29,7 +29,7 @@ spec:
           value: $(params.namespace-name)
       script: |
         #!/usr/bin/env bash
-        set -uo pipefail
+        set -euo pipefail
         echo "=== TEARDOWN EPHEMERAL NAMESPACE ==="
 
         if [ -z "$NAMESPACE" ]; then
@@ -46,8 +46,8 @@ spec:
         echo "Deleting namespace: $NAMESPACE"
 
         if oc get namespace "$NAMESPACE" &>/dev/null; then
-          oc delete namespace "$NAMESPACE" --wait=false
-          echo "Namespace deletion initiated"
+          oc delete namespace "$NAMESPACE" --timeout=60s || \
+            echo "WARNING: Namespace deletion failed or timed out (cleanup issue)"
         else
           echo "Namespace $NAMESPACE does not exist, nothing to delete"
         fi
