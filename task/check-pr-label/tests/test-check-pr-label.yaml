@@ -28,9 +28,10 @@ spec:
               set -euo pipefail
               python3 -m unittest discover -s /mnt/regression -p test_check_pr_label.py -v
 
-    # The optional Secret is deliberately absent. Neither lookup should
-    # contact an API, and both must return the string "false".
+    # The Secret is deliberately absent. Both Tasks must fail before
+    # contacting an API; continue here only to verify these expected failures.
     - name: check-github-without-token
+      onError: continue
       taskRef:
         name: check-pr-label
       params:
@@ -44,6 +45,7 @@ spec:
           value: check-pr-label-no-token-fixture
 
     - name: check-gitlab-without-token
+      onError: continue
       taskRef:
         name: check-pr-label
       params:
@@ -56,32 +58,30 @@ spec:
         - name: git-token-secret-name
           value: check-pr-label-no-token-fixture
 
+  finally:
     - name: verify-results
-      runAfter:
-        - check-github-without-token
-        - check-gitlab-without-token
       params:
-        - name: github-result
-          value: $(tasks.check-github-without-token.results.has-label)
-        - name: gitlab-result
-          value: $(tasks.check-gitlab-without-token.results.has-label)
+        - name: github-status
+          value: $(tasks.check-github-without-token.status)
+        - name: gitlab-status
+          value: $(tasks.check-gitlab-without-token.status)
       taskSpec:
         params:
-          - name: github-result
+          - name: github-status
             type: string
-          - name: gitlab-result
+          - name: gitlab-status
             type: string
         steps:
           - name: verify
             image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
             env:
-              - name: GITHUB_RESULT
-                value: $(params.github-result)
-              - name: GITLAB_RESULT
-                value: $(params.gitlab-result)
+              - name: GITHUB_STATUS
+                value: $(params.github-status)
+              - name: GITLAB_STATUS
+                value: $(params.gitlab-status)
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
-              test "$GITHUB_RESULT" = false
-              test "$GITLAB_RESULT" = false
-              echo "Both platforms return false when the token is absent"
+              test "$GITHUB_STATUS" = Failed
+              test "$GITLAB_STATUS" = Failed
+              echo "Both platforms fail when the token is absent"

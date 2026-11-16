@@ -16,14 +16,22 @@ SCRIPT = Path(os.environ["CHECK_PR_LABEL_SCRIPT"])
 class LabelCheckTests(unittest.TestCase):
     def run_case(self, fixture, *, host="gitlab.example.com", status="merged",
                  label="evaluate", token="fixture-token", error=None,
-                 pr_number="", context_pr_number=None):
+                 pr_number="", context_pr_number=None, pages=None,
+                 expect_failure=False, warning=None):
+        if isinstance(error, urllib.error.HTTPError):
+            self.addCleanup(error.close)
+
         class Response:
+            def __init__(self, fixture, link=""):
+                self.fixture = fixture
+                self.headers = {"Link": link}
+
             def __enter__(self):
                 return self
             def __exit__(self, *args):
                 return False
             def read(self):
-                return (fixture if isinstance(fixture, str) else json.dumps(fixture)).encode()
+                return (self.fixture if isinstance(self.fixture, str) else json.dumps(self.fixture)).encode()
 
         with tempfile.TemporaryDirectory() as temp:
             result = Path(temp) / "result"
@@ -35,25 +43,32 @@ class LabelCheckTests(unittest.TestCase):
                     os.environ.pop("CONTEXT_PR_NUMBER", None)
                 else:
                     os.environ["CONTEXT_PR_NUMBER"] = context_pr_number
-                lookup.return_value = Response()
-                lookup.side_effect = error
-                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                    runpy.run_path(str(SCRIPT), run_name="__main__")
-                return result.read_text(), lookup
+                lookup.return_value = Response(fixture)
+                lookup.side_effect = ([page if isinstance(page, Exception) else Response(*page)
+                                       for page in pages] if pages is not None else error)
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+                    if expect_failure:
+                        with self.assertRaises(SystemExit) as failure:
+                            runpy.run_path(str(SCRIPT), run_name="__main__")
+                        self.assertTrue(failure.exception.code)
+                        self.assertFalse(result.exists(), "A failed check must not write has-label")
+                    else:
+                        runpy.run_path(str(SCRIPT), run_name="__main__")
+                if warning is not None:
+                    self.assertIn(warning, stderr.getvalue())
+                return result.read_text() if result.exists() else None, lookup
 
     def test_gitlab_legacy_gate(self):
         cases = [
             ("merged matching", [{"state": "merged", "labels": ["evaluate"]}], "true"),
-            ("later merged matching", [{"state": "opened", "labels": ["other"]},
-                                       {"state": "merged", "labels": ["evaluate"]}], "true"),
+            ("later merged matching", [{"iid": 16, "created_at": "2026-11-14T10:00:00Z", "state": "opened", "labels": ["other"]},
+                                       {"iid": 17, "created_at": "2026-11-15T10:00:00Z", "state": "merged", "labels": ["evaluate"]}], "true"),
             ("open matching", [{"state": "opened", "labels": ["evaluate"]}], "false"),
             ("closed matching", [{"state": "closed", "labels": ["evaluate"]}], "false"),
             ("merged wrong label", [{"state": "merged", "labels": ["other"]}], "false"),
-            ("no merge requests", [], "false"),
-            ("missing labels", [{"state": "merged"}], "false"),
-            ("null labels", [{"state": "merged", "labels": None}], "false"),
-            ("separate matching fields", [{"state": "opened", "labels": ["evaluate"]},
-                                          {"state": "merged", "labels": []}], "false"),
+            ("separate matching fields", [{"iid": 16, "created_at": "2026-11-14T10:00:00Z", "state": "opened", "labels": ["evaluate"]},
+                                          {"iid": 17, "created_at": "2026-11-15T10:00:00Z", "state": "merged", "labels": []}], "false"),
         ]
         for name, fixture, expected in cases:
             with self.subTest(name=name):
@@ -90,29 +105,27 @@ class LabelCheckTests(unittest.TestCase):
                                  api + "/repos/group/sub/repo/commits/deadbeef/pulls")
                 self.assertEqual(lookup.call_args.args[0].get_header("Authorization"), "token fixture-token")
 
-    def test_missing_token_skips_api(self):
+    def test_missing_token_fails_without_api(self):
         for host in ("github.com", "gitlab.example.com"):
             with self.subTest(host=host):
-                result, lookup = self.run_case([], host=host, token="")
-                self.assertEqual(result, "false")
+                _, lookup = self.run_case([], host=host, token="", expect_failure=True)
                 lookup.assert_not_called()
 
-    def test_lookup_failures_return_false(self):
+    def test_lookup_failures_fail_without_result(self):
         errors = [urllib.error.URLError("fixture connection refused"),
-                  urllib.error.HTTPError("https://gitlab.example.com", 503, "fixture unavailable", {}, None),
                   TimeoutError("fixture timeout")]
+        errors += [urllib.error.HTTPError("https://example.com", code, "fixture error", {}, None)
+                   for code in (401, 403, 404, 500, 503)]
         for host in ("github.com", "gitlab.example.com"):
             for error in errors:
                 with self.subTest(host=host, error=type(error).__name__):
-                    result, _ = self.run_case([], host=host, error=error)
-                    self.assertEqual(result, "false")
-            result, _ = self.run_case("not-json", host=host)
-            self.assertEqual(result, "false")
+                    self.run_case([], host=host, error=error, expect_failure=True)
+            self.run_case("not-json", host=host, expect_failure=True)
 
     def test_invalid_configuration_fails(self):
         for options in ({"status": "invalid"}, {"host": "unsupported.example.com"}):
-            with self.subTest(options=options), self.assertRaises(SystemExit):
-                self.run_case([], **options)
+            with self.subTest(options=options):
+                self.run_case([], expect_failure=True, **options)
 
     def test_direct_github_pr_lookup(self):
         for host in ("github.com", "github.example.com"):
@@ -136,14 +149,18 @@ class LabelCheckTests(unittest.TestCase):
     def test_explicit_pr_overrides_context(self):
         for host, path in [("github.com", "/pulls/17"), ("gitlab.example.com", "/merge_requests/17")]:
             with self.subTest(host=host):
-                _, lookup = self.run_case({}, host=host, pr_number="17", context_pr_number="99")
+                fixture = {"state": "merged", "labels": ["evaluate"]} if "gitlab" in host else {
+                    "state": "closed", "merged_at": "2026-11-09", "labels": [{"name": "evaluate"}]}
+                _, lookup = self.run_case(fixture, host=host, pr_number="17", context_pr_number="99")
                 lookup.assert_called_once()
                 self.assertTrue(lookup.call_args.args[0].full_url.endswith(path))
 
     def test_context_pr_number_used(self):
         for host, path in [("github.com", "/pulls/99"), ("gitlab.example.com", "/merge_requests/99")]:
             with self.subTest(host=host):
-                _, lookup = self.run_case({}, host=host, context_pr_number="99")
+                fixture = {"state": "merged", "labels": ["evaluate"]} if "gitlab" in host else {
+                    "state": "closed", "merged_at": "2026-11-09", "labels": [{"name": "evaluate"}]}
+                _, lookup = self.run_case(fixture, host=host, context_pr_number="99")
                 lookup.assert_called_once()
                 self.assertTrue(lookup.call_args.args[0].full_url.endswith(path))
 
@@ -152,7 +169,9 @@ class LabelCheckTests(unittest.TestCase):
                            ("gitlab.example.com", "/repository/commits/deadbeef/merge_requests")]:
             for context in (None, ""):
                 with self.subTest(host=host, context=context):
-                    result, lookup = self.run_case([], host=host, context_pr_number=context)
+                    fixture = {"state": "merged", "labels": []} if "gitlab" in host else {
+                        "state": "closed", "merged_at": "2026-11-09", "labels": []}
+                    result, lookup = self.run_case([fixture], host=host, context_pr_number=context)
                     self.assertEqual(result, "false")
                     lookup.assert_called_once()
                     self.assertTrue(lookup.call_args.args[0].full_url.endswith(path))
@@ -190,10 +209,92 @@ class LabelCheckTests(unittest.TestCase):
                 for fixture, error in failures:
                     with self.subTest(host=host, source=source, error=error, fixture=fixture):
                         options = {"pr_number": "17"} if source == "explicit" else {"context_pr_number": "17"}
-                        result, lookup = self.run_case(fixture, host=host, error=error, **options)
-                        self.assertEqual(result, "false")
+                        _, lookup = self.run_case(fixture, host=host, error=error, expect_failure=True, **options)
                         lookup.assert_called_once()
                         self.assertTrue(lookup.call_args.args[0].full_url.endswith(path))
+
+    def test_no_associated_pr_fails(self):
+        for host in ("github.com", "gitlab.example.com"):
+            with self.subTest(host=host):
+                _, lookup = self.run_case([], host=host, expect_failure=True)
+                lookup.assert_called_once()
+
+    def test_invalid_response_fails(self):
+        for host in ("github.com", "gitlab.example.com"):
+            invalid_items = [{}, {"state": "merged"}, {"state": "merged", "labels": None},
+                             {"state": "merged", "labels": "evaluate"}, {"labels": []},
+                             {"state": "invalid", "labels": []},
+                             {"state": "closed", "merged_at": None, "labels": [None]}]
+            if "github" in host:
+                invalid_items += [{"state": "invalid", "merged_at": "2026-11-09", "labels": []},
+                                  {"state": "closed", "merged_at": False, "labels": [{"name": "evaluate"}]},
+                                  {"state": "closed", "merged_at": "", "labels": []}]
+            for item in invalid_items:
+                for number, fixture in (("17", item), ("", [item])):
+                    with self.subTest(host=host, fixture=fixture, pr_number=number):
+                        self.run_case(fixture, host=host, pr_number=number, expect_failure=True)
+            for number, fixture in (("17", []), ("17", None), ("", {}), ("", [None])):
+                with self.subTest(host=host, fixture=fixture, pr_number=number):
+                    self.run_case(fixture, host=host, pr_number=number, expect_failure=True)
+
+    def test_latest_pr_selected_before_label_and_status(self):
+        for host in ("github.com", "gitlab.example.com"):
+            for status, newest_matches_label, newest_is_merged, expected in (
+                    ("", False, True, "false"), ("merged", False, True, "false"),
+                    ("merged", True, False, "false"), ("", True, False, "true"),
+                    ("merged", True, True, "true")):
+                older = {"created_at": "2026-11-14T10:00:00Z", "updated_at": "2026-11-16T10:00:00Z"}
+                newer = {"created_at": "2026-11-15T10:00:00Z", "updated_at": "2026-11-15T10:00:00Z"}
+                if "github" in host:
+                    older.update(number=16, state="closed", merged_at="2026-11-14", labels=[{"name": "evaluate"}])
+                    newer.update(number=17, state="closed" if newest_is_merged else "open",
+                                 merged_at="2026-11-15" if newest_is_merged else None,
+                                 labels=[{"name": "evaluate"}] if newest_matches_label else [])
+                else:
+                    older.update(iid=16, state="merged", labels=["evaluate"])
+                    newer.update(iid=17, state="merged" if newest_is_merged else "opened",
+                                 labels=["evaluate"] if newest_matches_label else [])
+                for fixtures in ([older, newer], [newer, older]):
+                    with self.subTest(host=host, status=status, fixtures=fixtures):
+                        value, lookup = self.run_case(fixtures, host=host, status=status,
+                            warning="Found 2 PRs/MRs without a PR number; checking only the latest PR/MR 17")
+                        self.assertEqual(value, expected)
+                        lookup.assert_called_once()
+
+    def test_invalid_creation_date_fails_when_selection_is_ambiguous(self):
+        for host in ("github.com", "gitlab.example.com"):
+            for bad in ({}, {"created_at": "not-a-date"}):
+                with self.subTest(host=host, bad=bad):
+                    self.run_case([{"created_at": "2026-11-14T10:00:00Z"}, bad],
+                                  host=host, expect_failure=True)
+
+    def test_pagination_selects_latest_pr(self):
+        for host in ("github.com", "gitlab.example.com"):
+            if "github" in host:
+                url = "https://api.github.com/repos/group/sub/repo/commits/deadbeef/pulls"
+                older = {"number": 16, "state": "closed", "merged_at": "2026-11-14", "labels": [{"name": "evaluate"}]}
+                newer = {"number": 17, "state": "closed", "merged_at": "2026-11-15", "labels": []}
+            else:
+                url = "https://gitlab.example.com/api/v4/projects/group%2Fsub%2Frepo/repository/commits/deadbeef/merge_requests"
+                older = {"iid": 16, "state": "merged", "labels": ["evaluate"]}
+                newer = {"iid": 17, "state": "merged", "labels": []}
+            older["created_at"] = "2026-11-14T10:00:00Z"
+            newer["created_at"] = "2026-11-15T10:00:00Z"
+            with self.subTest(host=host):
+                value, lookup = self.run_case(None, host=host,
+                    pages=[([older], f'<{url}?page=2>; rel="next"'), ([newer], "")],
+                    warning="Found 2 PRs/MRs without a PR number; checking only the latest PR/MR 17")
+                self.assertEqual(value, "false")
+                self.assertEqual(lookup.call_count, 2)
+                self.assertEqual(lookup.call_args.args[0].full_url, url + "?page=2")
+                self.run_case(None, host=host,
+                    pages=[([older], f'<{url}?page=2>; rel="next"'), TimeoutError("fixture timeout")],
+                    expect_failure=True)
+
+    def test_pagination_rejects_another_host(self):
+        _, lookup = self.run_case(None, pages=[([], '<https://other.example.com/page2>; rel="next"')],
+                                  expect_failure=True)
+        lookup.assert_called_once()
 
 
 if __name__ == "__main__":

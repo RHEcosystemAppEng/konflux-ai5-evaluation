@@ -14,7 +14,8 @@ spec:
     Checks whether a target PR label is present on a specific pull/merge request
     or one associated with a given git commit. Supports both GitHub and GitLab.
     Derives the API endpoint from the git-url host. Returns "true" if the
-    label is found, "false" otherwise.
+    label and optional status match, "false" otherwise. Fails if no request
+    can be selected or the check cannot be completed.
   params:
     - name: git-url
       type: string
@@ -68,9 +69,11 @@ spec:
           value: $(results.has-label.path)
       script: |
         #!/usr/bin/env python3
+        from datetime import datetime
         import json
         import os
         from pathlib import Path
+        import re
         import ssl
         import sys
         import urllib.parse
@@ -82,9 +85,8 @@ spec:
 
         token = os.environ.get("GIT_TOKEN", "")
         label = os.environ["TARGET_LABEL"]
-        result = False
         if not token:
-            print("WARNING: GIT_TOKEN not available, returning false", file=sys.stderr)
+            sys.exit("ERROR: GIT_TOKEN is required to check PR/MR labels")
         else:
             repository = urllib.parse.urlsplit(os.environ["GIT_URL"])
             host = (repository.hostname or "").lower()
@@ -109,25 +111,48 @@ spec:
                 sys.exit(f"ERROR: Unsupported Git platform: {host}")
 
             try:
-                request = urllib.request.Request(url, headers=headers)
                 # Preserve the existing tasks' handling of internal Git certificates.
                 context = ssl._create_unverified_context()
-                with urllib.request.urlopen(request, context=context, timeout=30) as response:
-                    requests = json.loads(response.read())
-                if pr_number:
-                    requests = [requests]
-                for item in requests:
-                    if platform == "github":
-                        labels = [entry["name"] for entry in (item.get("labels") or [])]
-                        state = "merged" if item.get("merged_at") is not None else item.get("state")
-                    else:
-                        labels = item.get("labels") or []
-                        state = "open" if item.get("state") == "opened" else item.get("state")
-                    if label in labels and (not status or state == status):
-                        result = True
+                requests = []
+                next_url = url
+                while next_url:
+                    request = urllib.request.Request(next_url, headers=headers)
+                    with urllib.request.urlopen(request, context=context, timeout=30) as response:
+                        page = json.loads(response.read())
+                        next_page = re.search(r'<([^>]+)>;\s*rel="next"', response.headers.get("Link", ""))
+                    if pr_number:
+                        requests = [page]
                         break
+                    if not isinstance(page, list):
+                        raise ValueError("Expected a list of PR/MR objects from commit lookup")
+                    requests.extend(page)
+                    next_url = next_page.group(1) if next_page else None
+                    if next_url and urllib.parse.urlsplit(next_url)[:2] != urllib.parse.urlsplit(url)[:2]:
+                        raise ValueError("Unexpected pagination host or scheme")
+                if not requests:
+                    raise ValueError("No PRs/MRs found for the commit; this Task requires an associated PR/MR")
+                if len(requests) > 1:
+                    item = max(requests, key=lambda item: datetime.fromisoformat(item["created_at"]))
+                    number = item["number" if platform == "github" else "iid"]
+                    print(f"WARNING: Found {len(requests)} PRs/MRs without a PR number; checking only the latest PR/MR {number}", file=sys.stderr)
+                else:
+                    item = requests[0]
+                labels, state = item["labels"], item["state"]
+                valid_states = ("open", "closed") if platform == "github" else ("opened", "closed", "merged", "locked")
+                if not isinstance(labels, list) or state not in valid_states:
+                    raise ValueError("Invalid label or status data on the selected PR/MR")
+                if platform == "github":
+                    labels = [entry["name"] for entry in labels]
+                    if item["merged_at"] is not None:
+                        datetime.fromisoformat(item["merged_at"])
+                        state = "merged"
+                else:
+                    state = "open" if state == "opened" else state
+                if any(not isinstance(name, str) for name in labels):
+                    raise ValueError("Invalid label data on the selected PR/MR")
+                result = label in labels and (not status or state == status)
             except Exception as error:
-                print(f"WARNING: PR/MR lookup failed: {error}; returning false", file=sys.stderr)
+                sys.exit(f"ERROR: PR/MR lookup failed: {error}")
 
         value = "true" if result else "false"
         Path(os.environ["RESULT_PATH"]).write_text(value)
