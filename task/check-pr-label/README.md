@@ -23,20 +23,28 @@ For the skills evaluation gate, set `target-label: evaluate` and
 
 | name | description |
 |---|---|
-| has-label | `true` if an associated request matches the label and optional status; `false` otherwise. |
+| has-label | `true` if the selected request matches the label and optional status; `false` if it does not. |
 
-The task returns `false` if no token is available, no request matches, or
-the API lookup fails, including malformed JSON responses. Invalid status
-values and unsupported hosts with a token fail the task.
+The task writes `has-label` only after checking a selected request. Missing
+credentials, API errors (including authentication failures and direct-lookup
+404s), malformed or unusable responses, and no associated requests fail the
+task without writing a result. Invalid status values and unsupported hosts
+also fail the task.
 
 The task uses the existing Python image and installs no packages at runtime.
 
 Request selection uses explicit `pr-number` first, then the optional
 `CONTEXT_PR_NUMBER` environment variable injected by the calling PipelineRun.
-When both are empty, the existing commit lookup is used. A direct lookup failure
-returns `false` without falling back to another request associated with the SHA.
-Commit lookup retains its existing behavior: any matching associated request
-can return `true`.
+When both are empty, commit lookup is used and all response pages are read.
+If exactly one associated request is found, it is selected. If multiple requests are found,
+the task warns and checks only the most recently created request, using
+`created_at` rather than API response order or update time. Invalid or missing
+creation dates fail selection when multiple requests are present.
+
+The optional status filter is applied after selecting the request. An older
+request cannot enable the gate when the newest request does not match.
+A direct lookup failure fails the task without falling back to SHA lookup.
+Direct pushes with no associated PR/MR are unsupported and fail the task.
 
 ## Workspaces
 
@@ -46,7 +54,7 @@ None.
 
 | Secret (param) | Keys | Source | Purpose |
 |---|---|---|---|
-| `git-token-secret-name` | `git-token-secret-key` (optional) | Namespace running the Task | Read pull or merge requests from the Git API. |
+| `git-token-secret-name` | `git-token-secret-key` | Namespace running the Task | Required token to read pull or merge requests from the Git API. |
 
 The task sends the token through the GitHub `Authorization` header or GitLab
 `PRIVATE-TOKEN` header. Hostnames must contain `github` or `gitlab`, matching
