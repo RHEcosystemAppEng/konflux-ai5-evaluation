@@ -33,6 +33,6 @@ config:
     timeout: 1800s
 
   taskSets:
-    - path: tasks/tool-correctness.yaml
     - path: tasks/edge-case-handling.yaml
     - path: tasks/sensitive-data-redaction.yaml
+    - path: tasks/tool-correctness.yaml
