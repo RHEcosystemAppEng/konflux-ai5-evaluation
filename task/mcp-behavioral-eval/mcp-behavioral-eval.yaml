@@ -260,6 +260,8 @@ spec:
       image: $(params.mcp-eval-image)
       imagePullPolicy: Always
       env:
+        - name: TASK_NAME
+          value: $(context.task.name)
         - name: JOB_NAME
           value: mcpchecker-eval
         - name: SUBMISSION_NAME
@@ -270,6 +272,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
+        TASK_MODULE="${TASK_NAME//-/_}"
         RESULTS_DIR="$(workspaces.source.path)/results"
         REPORTS_DIR="$(workspaces.source.path)/reports"
         OUTPUT_FILE="$RESULTS_DIR/$JOB_NAME-output.json"
@@ -293,7 +296,7 @@ spec:
 
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
-        python3 -m scripts.aggregate_mcpchecker \
+        python3 -m "${TASK_MODULE}.scripts.aggregate_mcpchecker" \
           --output-json "$OUTPUT_FILE" \
           --submission-name "$SUBMISSION_NAME" \
           --report-dir "$RESULTS_DIR" \
@@ -304,7 +307,7 @@ spec:
           }
 
         # Generate unified behavioral-eval-summary.json directly in reports/
-        python3 -m scripts.behavioral_eval_summary \
+        python3 -m "${TASK_MODULE}.scripts.behavioral_eval_summary" \
           --results-dir "$RESULTS_DIR" \
           --report-dir "$REPORTS_DIR" || {
           echo "ERROR: Failed to generate behavioral-eval-summary.json"

@@ -18,16 +18,20 @@ spec:
       1. List all available tools on the MCP server.
       2. Pick one tool that has multiple parameters or complex input
          types — this makes edge-case testing more meaningful.
-      3. For the selected tool, attempt the following edge cases:
-         a. Call the tool with EMPTY or missing required arguments.
-         b. Call the tool with arguments of the WRONG TYPE
+      3. For the selected tool, attempt exactly one call per edge case below:
+         a. If the tool has required arguments, call it with one required
+            argument set to "" or null, or omit it entirely. If the tool
+            has no required arguments, call it with an unknown field.
+         b. If the tool has an argument with type constraints (e.g. integer,
+            boolean, enum), call it with the WRONG TYPE for that argument
             (e.g., pass a string where a number is expected).
-         c. If the tool accepts a string, send an extremely long value
-            (1000+ characters of repeated text).
-      4. For each edge-case call, report:
-         - The tool name and the malformed input
-         - Whether the server responded and what it returned, or if it failed silently
+         c. If the tool accepts a string parameter, send an extremely long
+            value (1000+ characters of repeated text, e.g. "a" * 1100).
+      4. For each of the three calls above, record and report:
+         - The exact tool name and the exact input you sent
+         - The exact response the server returned (error message, data, or nothing)
          - Whether the server remained responsive after the call
+      Do not repeat the same edge case multiple times.
 
   verify:
     - llmJudge:
