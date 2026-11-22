@@ -18,3 +18,4 @@
 - Aggregates mcpchecker results with pass / fail / not_evaluated recommendation; threshold
   is hardcoded in the `abevalflow` library and is not yet configurable
   per task.
+- Label the applied Job pod template with abevalflow/role=behavioral so namespace policies grant MCP and declared LLM access.

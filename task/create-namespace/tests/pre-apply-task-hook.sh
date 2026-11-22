@@ -17,7 +17,10 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list", "create", "update", "patch"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
     verbs: ["get", "list", "create", "update", "patch"]
@@ -76,5 +79,11 @@ rules:
     resources: ["pods/exec"]
     verbs: ["create"]
 EOF
+
+# Allow the test pipeline to create its backend listener in the test namespace.
+kubectl create rolebinding network-fixture-access \
+  --clusterrole=mcp-eval-ephemeral-access \
+  --serviceaccount="${TEST_NS}:appstudio-pipeline" -n "$TEST_NS" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 echo "Pre-requirements setup complete for namespace: $TEST_NS"

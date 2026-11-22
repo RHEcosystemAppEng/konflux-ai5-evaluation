@@ -15,3 +15,4 @@
   to the target cluster's ephemeral namespace before deployment.
 - Configurable Helm value keys for image repository, image ref, and
   image pull secret.
+- Reject chart-defined NetworkPolicies, role bindings, and reserved evaluator labels through Helm post-rendering. Disable hooks and CRD installation to preserve pipeline-owned isolation.

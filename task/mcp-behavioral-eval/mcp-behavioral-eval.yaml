@@ -235,7 +235,9 @@ spec:
         JOB_NAME="${TASK_NAME}-${RUN_ID}"
 
         # Apply the Job
-        oc apply -f "$(workspaces.reports.path)/mcp-behavioral-eval-job.yaml" --namespace="$NAMESPACE"
+        oc patch --local -f "$(workspaces.reports.path)/mcp-behavioral-eval-job.yaml" \
+          --type=merge -p '{"spec":{"template":{"metadata":{"labels":{"abevalflow/role":"behavioral"}}}}}' -o yaml \
+          | oc apply --namespace="$NAMESPACE" -f -
 
         # Wait for Job completion
         TIMEOUT=$JOB_TIMEOUT

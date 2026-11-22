@@ -1,5 +1,6 @@
 # Tests actual namespace creation using an in-cluster kubeconfig.
-# Verifies the namespace is created with correct labels and RBAC.
+# Verifies labels, RBAC, and actual allowed/blocked network connections.
+# The cluster CNI must enforce NetworkPolicy; a no-op CNI fails these tests.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -46,9 +47,51 @@ spec:
         - name: kubeconfig-ws
           workspace: tests-workspace
 
-    - name: run-create-namespace
+    - name: setup-network-fixture
       runAfter:
         - setup-kubeconfig
+      taskSpec:
+        results:
+          - name: backend-ip
+          - name: dns-namespace
+          - name: dns-port
+        steps:
+          - name: create-listeners
+            image: bitnami/kubectl:latest
+            env:
+              - name: TEST_NAMESPACE
+                value: $(context.pipelineRun.namespace)
+              - name: FIXTURE
+                value: network-fixture-$(context.pipelineRun.uid)
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              kubectl run "$FIXTURE" -n "$TEST_NAMESPACE" \
+                --image=registry.access.redhat.com/ubi9/python-312:latest \
+                --labels=abevalflow/role=behavioral --restart=Never --command -- \
+                python3 -u -c '
+              from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+              from threading import Thread
+              from time import sleep
+              for port in (8080, 8081, 8082, 8083):
+                  server = ThreadingHTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+                  Thread(target=server.serve_forever, daemon=True).start()
+              sleep(900)
+              '
+              kubectl wait -n "$TEST_NAMESPACE" --for=condition=Ready "pod/$FIXTURE" --timeout=180s
+              kubectl get pod "$FIXTURE" -n "$TEST_NAMESPACE" -o jsonpath='{.status.podIP}' \
+                > "$(results.backend-ip.path)"
+              if kubectl get service dns-default -n openshift-dns >/dev/null 2>&1; then
+                printf openshift-dns > "$(results.dns-namespace.path)"
+                printf 5353 > "$(results.dns-port.path)"
+              else
+                printf kube-system > "$(results.dns-namespace.path)"
+                printf 53 > "$(results.dns-port.path)"
+              fi
+
+    - name: run-create-namespace
+      runAfter:
+        - setup-network-fixture
       taskRef:
         name: create-namespace
       params:
@@ -58,6 +101,16 @@ spec:
           value: "appstudio-pipeline"
         - name: pipeline-sa-namespace
           value: "$(context.pipelineRun.namespace)"
+        - name: backend-endpoints
+          value: "$(tasks.setup-network-fixture.results.backend-ip):8080"
+        - name: llm-endpoints
+          value: "$(tasks.setup-network-fixture.results.backend-ip):8081"
+        - name: compass-endpoints
+          value: "$(tasks.setup-network-fixture.results.backend-ip):8082"
+        - name: dns-namespace
+          value: "$(tasks.setup-network-fixture.results.dns-namespace)"
+        - name: dns-port
+          value: "$(tasks.setup-network-fixture.results.dns-port)"
       workspaces:
         - name: target-kubeconfig
           workspace: tests-workspace
@@ -68,9 +121,13 @@ spec:
       params:
         - name: namespace-name
           value: $(tasks.run-create-namespace.results.namespace-name)
+        - name: backend-ip
+          value: $(tasks.setup-network-fixture.results.backend-ip)
       taskSpec:
         params:
           - name: namespace-name
+            type: string
+          - name: backend-ip
             type: string
         steps:
           - name: check-namespace
@@ -104,3 +161,134 @@ spec:
                 exit 1
               fi
               echo "RoleBinding verified successfully"
+
+          - name: check-network
+            image: bitnami/kubectl:latest
+            env:
+              - name: NAMESPACE_NAME
+                value: $(params.namespace-name)
+              - name: BACKEND_IP
+                value: $(params.backend-ip)
+              - name: TEST_NAMESPACE
+                value: $(context.pipelineRun.namespace)
+              - name: FIXTURE
+                value: network-fixture-$(context.pipelineRun.uid)
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              kubectl get networkpolicy -n "$NAMESPACE_NAME"
+              kubectl run mcp -n "$NAMESPACE_NAME" \
+                --image=registry.access.redhat.com/ubi9/python-312:latest --restart=Never --command -- \
+                python3 -u -c '
+              from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+              from threading import Thread
+              from time import sleep
+              for port in (8080, 8081):
+                  server = ThreadingHTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+                  Thread(target=server.serve_forever, daemon=True).start()
+              sleep(900)
+              '
+              for ROLE in behavioral conformance publisher outsider; do
+                LABELS=()
+                if [ "$ROLE" != outsider ]; then
+                  LABELS=(--labels="abevalflow/role=$ROLE")
+                fi
+                kubectl run "$ROLE" -n "$NAMESPACE_NAME" "${LABELS[@]}" \
+                  --image=registry.access.redhat.com/ubi9/python-312:latest --restart=Never --command -- \
+                  python3 -c 'import time; time.sleep(900)'
+              done
+              kubectl wait -n "$NAMESPACE_NAME" --for=condition=Ready pod --all --timeout=180s
+              kubectl expose pod mcp -n "$NAMESPACE_NAME" --port=8080 --target-port=8080
+              MCP_IP=$(kubectl get pod mcp -n "$NAMESPACE_NAME" -o jsonpath='{.status.podIP}')
+
+              # Positive controls: every mock port is listening, including the
+              # undeclared port. Blocked requests cannot pass due to a dead server.
+              kubectl exec -i -n "$TEST_NAMESPACE" "$FIXTURE" -- python3 - "$BACKEND_IP" <<'PY'
+              import socket, sys, time
+              for port in (8080, 8081, 8082, 8083):
+                  for attempt in range(20):
+                      try:
+                          with socket.create_connection((sys.argv[1], port), timeout=2):
+                              break
+                      except OSError:
+                          if attempt == 19:
+                              raise
+                          time.sleep(1)
+              PY
+
+              for ROLE in mcp behavioral conformance publisher outsider cross-namespace; do
+                POD="$ROLE"
+                SOURCE_NAMESPACE="$NAMESPACE_NAME"
+                if [ "$ROLE" = cross-namespace ]; then
+                  POD="$FIXTURE"
+                  SOURCE_NAMESPACE="$TEST_NAMESPACE"
+                fi
+                kubectl exec -i -n "$SOURCE_NAMESPACE" "$POD" -- \
+                  python3 - "$BACKEND_IP" "$MCP_IP" "$ROLE" "mcp.$NAMESPACE_NAME.svc.cluster.local" <<'PY'
+              import socket, sys
+              backend, mcp, role, mcp_dns = sys.argv[1:]
+              checks = {
+                  "mcp": [(backend, 8080, True), (backend, 8081, False),
+                          (backend, 8082, False), (backend, 8083, False)],
+                  "behavioral": [(mcp, 8080, True), (backend, 8081, True),
+                                 (backend, 8080, False), (backend, 8082, False), (mcp, 8081, False)],
+                  "conformance": [(mcp, 8080, True), (backend, 8082, True), (backend, 8081, False)],
+                  "publisher": [(backend, 8082, True), (mcp, 8080, False), (backend, 8081, False)],
+                  "outsider": [(mcp, 8080, False)],
+                  "cross-namespace": [(mcp, 8080, False)],
+              }
+              if role in ("behavioral", "conformance"):
+                  checks[role].append((mcp_dns, 8080, True))
+              for host, port, allowed in checks[role]:
+                  try:
+                      with socket.create_connection((host, port), timeout=2):
+                          connected = True
+                  except OSError:
+                      connected = False
+                  assert connected == allowed, f"{role}: {host}:{port}, expected allowed={allowed}"
+                  print(f"PASS {role}: {host}:{port}, allowed={allowed}", flush=True)
+
+              if role == "mcp":
+                  # Exercise normal DNS resolution and TCP reachability without
+                  # implementing a DNS protocol client in this network test.
+                  socket.getaddrinfo("kubernetes.default.svc.cluster.local", 443)
+                  with open("/etc/resolv.conf") as resolv:
+                      resolver = next(line.split()[1] for line in resolv if line.startswith("nameserver "))
+                  with socket.create_connection((resolver, 53), timeout=5):
+                      pass
+                  print("PASS DNS resolution and TCP resolver access", flush=True)
+              PY
+              done
+  finally:
+    - name: cleanup-fixture
+      taskSpec:
+        steps:
+          - name: delete-fixture
+            image: bitnami/kubectl:latest
+            env:
+              - name: TEST_NAMESPACE
+                value: $(context.pipelineRun.namespace)
+              - name: FIXTURE
+                value: network-fixture-$(context.pipelineRun.uid)
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              kubectl delete pod "$FIXTURE" -n "$TEST_NAMESPACE" --ignore-not-found --wait=false
+    - name: cleanup-namespace
+      params:
+        - name: namespace-name
+          value: $(tasks.run-create-namespace.results.namespace-name)
+      taskSpec:
+        params:
+          - name: namespace-name
+            type: string
+        steps:
+          - name: delete-namespace
+            image: bitnami/kubectl:latest
+            env:
+              - name: NAMESPACE_NAME
+                value: $(params.namespace-name)
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              kubectl delete namespace "$NAMESPACE_NAME" --ignore-not-found --wait=false

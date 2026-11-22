@@ -247,3 +247,94 @@ spec:
               fi
 
               echo "Helm deployment and secrets created successfully"
+
+    - name: add-unsafe-policy
+      runAfter: [verify-deployment]
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: add-chart-policy
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              cat > "$(workspaces.source.path)/mcp-server-repo/chart/templates/unsafe.yaml" <<'EOF'
+              apiVersion: v1
+              kind: List
+              items:
+                - apiVersion: networking.k8s.io/v1
+                  kind: NetworkPolicy
+                  metadata:
+                    name: chart-allow-all
+                  spec:
+                    podSelector: {}
+                    policyTypes: [Ingress, Egress]
+                    ingress: [{}]
+                    egress: [{}]
+              EOF
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+
+    - name: reject-unsafe-chart
+      runAfter: [add-unsafe-policy]
+      onError: continue
+      taskRef:
+        name: deploy-mcp
+      params:
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+        - name: component-image
+          value: "registry.access.redhat.com/ubi9/ubi-minimal:latest"
+        - name: service-name
+          value: "test-mcp-server"
+        - name: image-pull-secret
+          value: "nonexistent-pull-secret"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+        - name: target-kubeconfig
+          workspace: tests-workspace
+  finally:
+    - name: verify-policy-rejection
+      params:
+        - name: status
+          value: $(tasks.reject-unsafe-chart.status)
+        - name: namespace-name
+          value: $(tasks.create-test-namespace.results.namespace-name)
+      taskSpec:
+        params:
+          - name: status
+            type: string
+          - name: namespace-name
+            type: string
+        steps:
+          - name: verify-and-cleanup
+            image: bitnami/kubectl:latest
+            env:
+              - name: TASK_STATUS
+                value: $(params.status)
+              - name: NAMESPACE
+                value: $(params.namespace-name)
+              - name: PIPELINE_NAMESPACE
+                value: $(context.pipelineRun.namespace)
+              - name: PIPELINE_RUN
+                value: $(context.pipelineRun.name)
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              trap 'kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=false' EXIT
+              [ "$TASK_STATUS" = Failed ]
+              LOGS=$(kubectl logs -n "$PIPELINE_NAMESPACE" \
+                -l "tekton.dev/pipelineRun=$PIPELINE_RUN,tekton.dev/pipelineTask=reject-unsafe-chart" \
+                -c step-deploy-helm)
+              if [[ "$LOGS" != *"Unsafe MCP chart:"* ]]; then
+                echo "FAIL: Task failed for a reason other than the chart policy guard"
+                exit 1
+              fi
+              if kubectl get networkpolicy chart-allow-all -n "$NAMESPACE"; then
+                echo "FAIL: Chart installed a permissive policy"
+                exit 1
+              fi
+              echo "Chart-defined policy rejected before installation"

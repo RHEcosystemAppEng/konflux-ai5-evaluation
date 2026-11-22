@@ -216,7 +216,9 @@ spec:
         echo "Created ConfigMap '$CONFIGMAP_NAME'"
 
         # Apply the Job
-        oc apply -f "$(workspaces.reports.path)/compass-publish-job.yaml" --namespace="$NAMESPACE"
+        oc patch --local -f "$(workspaces.reports.path)/compass-publish-job.yaml" \
+          --type=merge -p '{"spec":{"template":{"metadata":{"labels":{"abevalflow/role":"publisher"}}}}}' -o yaml \
+          | oc apply --namespace="$NAMESPACE" -f -
 
         # Wait for completion
         DEADLINE=$((SECONDS + JOB_TIMEOUT))

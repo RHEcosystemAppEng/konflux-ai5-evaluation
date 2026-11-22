@@ -13,7 +13,9 @@ spec:
     must exist at standardized locations in the repository.
     Credentials are mounted from OCP Secrets, never committed to git.
     The deployed service is accessible at <service-name>:<service-port>
-    within the namespace.
+    within the namespace. Helm hooks and CRD installation are disabled.
+    Charts cannot install NetworkPolicies or role bindings, or claim the
+    reserved abevalflow/role label used by trusted evaluation Jobs.
   params:
     - name: namespace-name
       type: string
@@ -225,11 +227,50 @@ spec:
         echo "Image override: repo=${IMAGE_REPO} ref=${IMAGE_REF}"
         echo "Image pull secret: ${IMAGE_PULL_SECRET}"
 
+        # Validate the manifests Helm will actually install, including Lists.
+        # Hooks bypass Helm 3 post-renderers, so disable them and CRD installation.
+        command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null \
+          || { echo "ERROR: deploy image needs python3 + PyYAML for the policy guard" >&2; exit 1; }
+        POLICY_GUARD=$(mktemp)
+        trap 'rm -f "$POLICY_GUARD"' EXIT
+        cat > "$POLICY_GUARD" <<'PY'
+        #!/usr/bin/env python3
+        import sys
+        import yaml
+
+        manifest = sys.stdin.read()
+        forbidden = {"NetworkPolicy", "RoleBinding", "ClusterRoleBinding"}
+
+        def validate(value):
+            if isinstance(value, dict):
+                if value.get("kind") in forbidden:
+                    raise ValueError("chart must not manage NetworkPolicies or role bindings")
+                metadata = value.get("metadata") or {}
+                if isinstance(metadata, dict) and "abevalflow/role" in (metadata.get("labels") or {}):
+                    raise ValueError("chart must not set the reserved abevalflow/role label")
+                for child in value.values():
+                    validate(child)
+            elif isinstance(value, list):
+                for child in value:
+                    validate(child)
+
+        try:
+            for document in yaml.safe_load_all(manifest):
+                validate(document)
+        except (ValueError, yaml.YAMLError) as error:
+            sys.exit(f"Unsafe MCP chart: {error}")
+        sys.stdout.write(manifest)
+        PY
+        chmod 700 "$POLICY_GUARD"
+
         echo "Deploying Helm release: $RELEASE_NAME"
         helm upgrade --install "$RELEASE_NAME" "$HELM_CHART" \
           --namespace "$NAMESPACE" \
           --values "$VALUES_FILE" \
           "${HELM_SETS[@]}" \
+          --post-renderer "$POLICY_GUARD" \
+          --no-hooks \
+          --skip-crds \
           --wait=false
 
         echo "Helm release deployed"

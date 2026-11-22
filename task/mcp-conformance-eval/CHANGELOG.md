@@ -17,3 +17,4 @@
   copied from the target cluster's default namespace (configurable).
 - Gate enforcement modes: block, warn, or disabled.
 - Runs as a Job on the target cluster.
+- Label the applied Job pod template with abevalflow/role=conformance so namespace policies grant only conformance network access.
