@@ -146,9 +146,9 @@ spec:
 
               # Verify all checks passed
               microdnf install -y python3 --nodocs 2>/dev/null
-              python3 <<'PYEOF'
-              import json, sys
-              with open("$SUMMARY") as f:
+              SUMMARY="$SUMMARY" python3 <<'PYEOF'
+              import json, os, sys
+              with open(os.environ["SUMMARY"]) as f:
                   summary = json.load(f)
               checks = summary.get("checks", [])
               if not all(c.get("passed", False) for c in checks):
@@ -201,9 +201,9 @@ spec:
 
               # Verify violations were detected
               microdnf install -y python3 --nodocs 2>/dev/null
-              python3 <<'PYEOF'
-              import json, sys
-              with open("$SUMMARY") as f:
+              SUMMARY="$SUMMARY" python3 <<'PYEOF'
+              import json, os, sys
+              with open(os.environ["SUMMARY"]) as f:
                   summary = json.load(f)
 
               checks = summary.get("checks", [])
