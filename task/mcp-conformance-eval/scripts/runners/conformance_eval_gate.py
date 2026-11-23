@@ -62,12 +62,13 @@ def main() -> int:
         check_key = result.get_policy_key()
         status = result.details.get("status", "unknown")
         (args.results_dir / f"{check_key}-result.json").write_text(result.model_dump_json(indent=2))
+        is_not_evaluated = status == "not_evaluated"
         summary.append(
             {
                 "check": check_key,
                 "status": status,
-                "passed": result.passed,
-                "score": result.score,
+                "passed": False if is_not_evaluated else result.passed,
+                "score": 0.0 if is_not_evaluated else result.score,
                 "findings": len(result.findings),
                 "source": result.details.get("source"),
                 "message": result.message,
@@ -75,7 +76,7 @@ def main() -> int:
         )
         logger.info("%s: status=%s passed=%s score=%.2f", check_key, status, result.passed, result.score)
 
-    overall_passed = all(r.passed for r in results)
+    overall_passed = all(s["passed"] for s in summary)
     counts = {
         "pass": sum(1 for s in summary if s["status"] == "pass"),
         "fail": sum(1 for s in summary if s["status"] == "fail"),
