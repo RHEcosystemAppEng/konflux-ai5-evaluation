@@ -19,8 +19,9 @@ spec:
           value: deadbeef
         - name: source-artifact
           value: localhost:5000/nonexistent/artifact:latest
+        # Set the runner here so tkn can start the test without prompting.
         - name: evaluation-image
-          value: $(params.evaluation-image)
+          value: quay.io/ecosystem-appeng/agent-eval-harness@sha256:6e45ccc233515d50a832e18ef2e7ef6d33c9368653b10db6d0c2d69323bbca5f
         - name: tiers
           value: '1'
       workspaces:
@@ -67,8 +68,3 @@ spec:
                   sys.exit(1)
               print('aeh-skill-eval correctly reported Tier A ERROR / Tier B SKIPPED for an unresolvable source-artifact')
               "
-  params:
-    - name: evaluation-image
-      type: string
-      description: CLI-compatible runtime image.
-      default: quay.io/ecosystem-appeng/agent-eval-harness:v1.0.6-runner
