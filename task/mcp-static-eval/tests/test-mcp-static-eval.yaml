@@ -49,7 +49,11 @@ spec:
               OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
               SOFTWARE.
               LICEOF
-              git add README.md LICENSE
+              cat > server.py <<'PYEOF'
+              def handle(request):
+                  return {"result": request.get("method")}
+              PYEOF
+              git add README.md LICENSE server.py
               git commit -m "Initial commit"
               echo "Created clean test repo"
       workspaces:
