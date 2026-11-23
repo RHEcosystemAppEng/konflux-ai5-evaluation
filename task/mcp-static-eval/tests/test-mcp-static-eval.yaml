@@ -113,6 +113,7 @@ spec:
     - name: run-with-violations
       runAfter:
         - setup-violations-repo
+        - verify-clean-repo
       taskRef:
         name: mcp-static-eval
       params:
