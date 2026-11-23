@@ -22,6 +22,7 @@ import logging
 import sys
 from pathlib import Path
 
+from abevalflow.gates.base import GateMode
 from abevalflow.mcp.gates import run_conformance_eval
 from abevalflow.schemas import GatePolicy
 
@@ -53,8 +54,7 @@ def main() -> int:
 
     args.reports_dir.mkdir(parents=True, exist_ok=True)
 
-    # Run all checks with default policy
-    policy = GatePolicy()
+    policy = GatePolicy(default_mode=GateMode.BLOCK)
     results = run_conformance_eval(args.results_dir, policy)
 
     summary: list[dict] = []
