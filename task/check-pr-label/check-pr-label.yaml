@@ -22,6 +22,7 @@ spec:
       description: Git repository URL (e.g. https://github.com/owner/repo)
     - name: git-revision
       type: string
+      default: ""
       description: Git commit SHA to look up associated PRs/MRs for
     - name: pr-number
       type: string
