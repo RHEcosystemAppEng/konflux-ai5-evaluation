@@ -63,8 +63,8 @@ spec:
               if tier_a.get('result') != 'ERROR':
                   print(f\"FAIL: expected TEST_OUTPUT_TIER_A result=ERROR, got {tier_a.get('result')!r}\")
                   sys.exit(1)
-              if tier_b.get('result') != 'SKIPPED':
-                  print(f\"FAIL: expected TEST_OUTPUT_TIER_B result=SKIPPED, got {tier_b.get('result')!r}\")
+              if tier_b.get('result') != 'ERROR':
+                  print(f\"FAIL: expected TEST_OUTPUT_TIER_B result=ERROR, got {tier_b.get('result')!r}\")
                   sys.exit(1)
-              print('aeh-skill-eval correctly reported Tier A ERROR / Tier B SKIPPED for an unresolvable source-artifact')
+              print('aeh-skill-eval correctly reported ERROR for both tiers when source retrieval failed')
               "
