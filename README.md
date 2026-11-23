@@ -4,6 +4,9 @@ These versioned Tekton Tasks produce build evidence for native, per-plugin
 Konflux Components. Official Enterprise Contract policies make market decisions.
 The managed release team owns its ECP, RPA, release pipeline and credentials.
 
+Task layout, versioning, linting, and integration tests follow `task-repo-shared-ci`.
+[Shared CI setup](SHARED-CI.md)
+
 ## Supported Task catalog
 
 | Task | Version | Responsibility |

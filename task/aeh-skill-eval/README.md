@@ -32,7 +32,7 @@ newer is required; pin it by digest in consuming pipelines.
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `changed-skills` | `[]` | Ordered catalog skill identifiers; an empty list is a successful no-op. |
+| `changed-skills` | `[]` | Ordered skill identifiers from the prepared plugin inventory. An empty list is a successful no-op. |
 | `submission-revision` | `Required` | Evaluated source commit SHA. |
 | `source-artifact` | `Required` | Trusted source artifact for the evaluated revision. |
 | `evaluation-image` | `Required` | Digest-pinned CLI 0.6.0+ image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
@@ -84,10 +84,9 @@ newer is required; pin it by digest in consuming pipelines.
 
 The `source` workspace holds `runs/<taskrun-name>/batch.json`, `summary.json`,
 and isolated per-skill run directories. Detailed outcomes remain in files to
-avoid Tekton result limits. Share this workspace with discovery and registration as their
-`source` workspace; keep the clone under `repo/` and batch evidence under `runs/`. The source input still comes from the trusted artifact,
-not the discovery clone. Allocate batch storage and task/pipeline timeouts for
-all selected skills and their bounded timeout retries.
+avoid Tekton result limits. The evaluator reads its source from the trusted
+artifact produced by `prepare-plugin`. Allocate workspace storage and timeouts
+for the full plugin inventory and its bounded timeout retries.
 
 Secrets and ConfigMap names are parameters. The workload kubeconfig is mounted
 read-only; workload credentials must already exist in that cluster with native
@@ -96,31 +95,44 @@ contracts. The optional CA bundle is mounted from `ca-bundle-configmap`.
 
 ## Usage
 
+This fragment uses the preparation, build, and tier selection results from the
+native per-plugin pipeline. [Reference pipeline](https://gitlab.cee.redhat.com/ai5-marketplace/plugin-pipeline/-/blob/per-plugin-componnent/konflux/pipelines/plugin-component-build.yaml)
+
 ```yaml
-- name: evaluate-skills
+- name: evaluate-skill
   taskRef:
-    name: aeh-skill-eval
+    resolver: bundles
+    params:
+      - name: name
+        value: aeh-skill-eval
+      - name: bundle
+        value: $(params.evaluation-task-bundle)
+      - name: kind
+        value: task
   params:
     - name: changed-skills
-      value: $(tasks.discover.results.changed-skills[*])
+      value:
+        - $(tasks.prepare-plugin.results.SCRIPT_OUTPUT_ARRAY[*])
     - name: submission-revision
-      value: $(params.revision)
+      value: $(tasks.clone-repository.results.commit)
     - name: source-artifact
-      value: $(tasks.clone.results.SOURCE_ARTIFACT)
+      value: $(tasks.prepare-plugin.results.SCRIPT_ARTIFACT)
+    - name: component-manifest
+      value: .konflux/package/manifest.json
     - name: tiers
-      value: '1,2'
+      value: $(tasks.select-evaluation-tiers.results.tiers)
     - name: evaluation-image
       value: $(params.evaluation-image)
     - name: persist
-      value: postgres,s3
+      value: $(params.persist)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
   workspaces:
     - name: source
-      workspace: evaluation-evidence
+      workspace: shared-workspace
 ```
-
-Build and publish the 0.6.0 CLI runner before publishing the 3.0.0 task bundle.
-Use the existing v1.0.2 trial image and 1.0.0 registration task. Upgrade both pipeline references together. Existing
-published 1.0.0 evaluation bundles retain their old interface.
 
 ### PostgreSQL evidence schema v2
 
