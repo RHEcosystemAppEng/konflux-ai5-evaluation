@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- Select the label provider and repository from `source-url` in automatic mode.
+- Support `mirror-source` as the only repository to query for a mirrored build.
+- Preserve the existing provider settings for callers that omit both URLs.
+
 ## 0.2.3
 
 - Support GitHub-only builds through `source-provider: github`, with no GitLab API token required.

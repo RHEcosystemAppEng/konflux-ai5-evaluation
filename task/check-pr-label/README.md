@@ -1,7 +1,7 @@
 # check-pr-label
 
-Version 0.2.3 resolves evaluation tiers for GitHub.com and GitLab Component
-builds, including GitHub commits mirrored to GitLab.
+Version 0.3.0 resolves evaluation tiers for GitHub.com and GitLab Component
+builds, including mirrors in either direction.
 
 | `tiers` | Behavior |
 |---|---|
@@ -10,26 +10,32 @@ builds, including GitHub commits mirrored to GitLab.
 | `auto` | Both tiers when a matching merge has `evaluate`. Otherwise Tier 1. |
 
 Pass `current-sha` from the trusted clone result and `target-branch` from the
-configured Component branch. In `auto` mode, use these Pipeline parameters to
-select the lookup. `label-name` defaults to `evaluate`.
+configured Component branch. In `auto` mode, pass the build repository URL as
+`source-url`. The shared Pipeline supplies it from `git-url`. If
+`mirror-source` is set, the Task queries that repository exclusively.
+`label-name` defaults to `evaluate`.
 
-| Build source | `source-provider` | `github-repository` |
+| Build repository | `mirror-source` | Label lookup |
 |---|---|---|
-| GitHub.com | `github` | Build repository as `owner/repo` |
-| GitLab | `gitlab` (default) | Leave empty |
-| GitHub mirrored to GitLab | `gitlab` (default) | Upstream GitHub.com repository as `owner/repo` |
+| GitHub.com | Empty | Build repository on GitHub |
+| GitLab | Empty | Build repository on GitLab |
+| GitLab mirror | Upstream GitHub.com repository URL | Upstream repository on GitHub |
+| GitHub mirror | Upstream GitLab repository URL | Upstream repository on GitLab |
 
-GitLab lookups use `gitlab-server-url`, the URL-encoded `gitlab-project-path`,
-and a read-API token from `git-token-secret-name` and `git-token-secret-key`.
-GitHub-only builds use the GitHub API directly. Public GitHub repositories work
-anonymously. For authenticated GitHub lookups, supply a token with pull request
-read access via `github-token-secret-name` and `github-token-secret-key`, which
-default to `github-pr-read-token` and `token`.
+The Task accepts HTTPS repository URLs and Git SSH clone URLs. Mirrors between
+repositories on the same provider also work. Configure the sync to preserve
+commit SHAs and use the same target branch on both sides.
 
-For mirrored builds, a matching GitLab MR decides the result, even when it has
-no evaluation label. The Task queries GitHub after a successful GitLab lookup
-finds no matching MR. Configure this for a sync that preserves commit SHAs and
-uses the same target branch on both platforms.
+For GitLab lookups, set `gitlab-server-url` to the selected GitLab server. The
+server defaults to `https://gitlab.cee.redhat.com`. This setting also scopes
+where the Task sends the read-API token from `git-token-secret-name` and
+`git-token-secret-key`. Public GitHub.com repositories work anonymously.
+For authenticated GitHub lookups, pass a pull request read token via
+`github-token-secret-name` and `github-token-secret-key`, which default to
+`github-pr-read-token` and `token`.
+
+Callers that omit both repository URLs continue to use the previous
+`source-provider`, `gitlab-project-path`, and `github-repository` settings.
 
 The Task matches only merged changes for the exact build SHA and target branch.
 GitLab supports merge, squash and fast-forward commit identities, with a short

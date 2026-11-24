@@ -220,7 +220,11 @@ spec:
     type: string
   - name: label-task-bundle
     type: string
-    description: Approved digest-pinned check-pr-label Task bundle (0.2.2 or later).
+    description: Approved digest-pinned check-pr-label Task bundle (0.3.0 or later).
+  - name: mirror-source
+    type: string
+    default: ''
+    description: Optional Git repository URL to use for label lookup instead of git-url.
   - name: target-branch
     type: string
     description: Destination branch used to identify the exact merged MR or PR.
@@ -230,10 +234,6 @@ spec:
   - name: gitlab-project-path
     type: string
     default: ai5-marketplace%2Fagentic-plugins
-  - name: github-repository
-    type: string
-    default: ''
-    description: Optional upstream GitHub.com owner/repo for label lookup on mirrored GitLab builds.
   - name: gitlab-token-secret
     type: string
     default: agentic-plugins-gitlab-sa
@@ -343,6 +343,10 @@ spec:
       value: $(tasks.clone-repository.results.commit)
     - name: tiers
       value: $(params.tiers)
+    - name: source-url
+      value: $(params.git-url)
+    - name: mirror-source
+      value: $(params.mirror-source)
     - name: target-branch
       value: $(params.target-branch)
     - name: label-name
@@ -351,8 +355,6 @@ spec:
       value: $(params.gitlab-server-url)
     - name: gitlab-project-path
       value: $(params.gitlab-project-path)
-    - name: github-repository
-      value: $(params.github-repository)
     - name: git-token-secret-name
       value: $(params.gitlab-token-secret)
     - name: ca-bundle-configmap
