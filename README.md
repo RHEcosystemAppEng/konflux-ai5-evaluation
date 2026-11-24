@@ -15,8 +15,10 @@ Its PipelineRun supplies the Task bundle and runtime image digests as parameters
 Build the Pipeline bundle using `tekton-bundle-builder-oci-ta` with
 `pipelines/plugin-component-build` as the Component source context. Set the
 generated PipelineRun's `path-context` to
-`pipelines/plugin-component-build/plugin-component-build.yaml`, then pin the
-published digest in consumer PipelineRuns.
+`pipelines/plugin-component-build/plugin-component-build.yaml`.
+Pull requests targeting `main` build a temporary bundle tagged `on-pr-<sha>`.
+Pushes to `main` that change the Pipeline or its publish configuration publish
+a bundle tagged with the commit SHA. Pin that bundle's digest in consumers.
 
 ## Supported Task catalog
 
