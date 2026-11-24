@@ -38,7 +38,7 @@ spec:
               cd /tmp
               mcpchecker check eval.yaml \
                 --mcp-config-file mcp-config.yaml \
-                -o json || echo "mcpchecker exited with code $?"
+                -o json
           workingDir: /tmp
           env:
             - name: HOME

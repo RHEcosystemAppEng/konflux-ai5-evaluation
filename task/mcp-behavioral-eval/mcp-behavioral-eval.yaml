@@ -121,24 +121,42 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        for SECRET_NAME in "$LLM_AGENT_SECRET" "$LLM_JUDGE_SECRET" "$LLM_CA_SECRET"; do
+        # Required secrets — fail immediately if missing or copy fails
+        for SECRET_NAME in "$LLM_AGENT_SECRET" "$LLM_JUDGE_SECRET"; do
           if [ -n "$SECRET_NAME" ]; then
-            # Check if secret already exists in ephemeral namespace
             if oc get secret "$SECRET_NAME" -n "$NAMESPACE" > /dev/null 2>&1; then
               echo "Secret '$SECRET_NAME' already present in $NAMESPACE"
               continue
             fi
-
-            # Copy secret from secrets namespace
-            if oc get secret "$SECRET_NAME" -n "$SECRETS_NAMESPACE" -o yaml \
-              | sed '/^\s*namespace:/d; /^\s*uid:/d; /^\s*resourceVersion:/d; /^\s*creationTimestamp:/d' \
-              | oc apply -n "$NAMESPACE" -f - 2>/dev/null; then
-              echo "Copied secret '$SECRET_NAME' from $SECRETS_NAMESPACE into $NAMESPACE"
-            else
-              echo "WARNING: Could not copy secret '$SECRET_NAME' from $SECRETS_NAMESPACE namespace"
+            if ! oc get secret "$SECRET_NAME" -n "$SECRETS_NAMESPACE" > /dev/null 2>&1; then
+              echo "ERROR: Required secret '$SECRET_NAME' not found in namespace '$SECRETS_NAMESPACE'. Task cannot proceed."
+              exit 1
             fi
+            if ! oc get secret "$SECRET_NAME" -n "$SECRETS_NAMESPACE" -o yaml \
+              | sed '/^\s*namespace:/d; /^\s*uid:/d; /^\s*resourceVersion:/d; /^\s*creationTimestamp:/d' \
+              | oc apply -n "$NAMESPACE" -f - 2>&1; then
+              echo "ERROR: Failed to copy required secret '$SECRET_NAME' from '$SECRETS_NAMESPACE'. Task cannot proceed."
+              exit 1
+            fi
+            echo "Copied secret '$SECRET_NAME' from $SECRETS_NAMESPACE into $NAMESPACE"
           fi
         done
+
+        # Optional secret — missing is fine, but a failed copy is an error
+        if [ -n "$LLM_CA_SECRET" ]; then
+          if oc get secret "$LLM_CA_SECRET" -n "$NAMESPACE" > /dev/null 2>&1; then
+            echo "Secret '$LLM_CA_SECRET' already present in $NAMESPACE"
+          elif ! oc get secret "$LLM_CA_SECRET" -n "$SECRETS_NAMESPACE" > /dev/null 2>&1; then
+            echo "WARNING: Optional secret '$LLM_CA_SECRET' not found in '$SECRETS_NAMESPACE', skipping"
+          elif ! oc get secret "$LLM_CA_SECRET" -n "$SECRETS_NAMESPACE" -o yaml \
+            | sed '/^\s*namespace:/d; /^\s*uid:/d; /^\s*resourceVersion:/d; /^\s*creationTimestamp:/d' \
+            | oc apply -n "$NAMESPACE" -f - 2>&1; then
+            echo "ERROR: Failed to copy secret '$LLM_CA_SECRET' from '$SECRETS_NAMESPACE'. Task cannot proceed."
+            exit 1
+          else
+            echo "Copied secret '$LLM_CA_SECRET' from $SECRETS_NAMESPACE into $NAMESPACE"
+          fi
+        fi
 
     # ── Step 2: Prepare Job manifest from template ──
     - name: prepare-job
