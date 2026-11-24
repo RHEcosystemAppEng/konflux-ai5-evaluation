@@ -283,11 +283,6 @@ spec:
           exit 1
         fi
 
-        if ! python3 -c "import json; json.load(open('$OUTPUT'))" 2>/dev/null; then
-          echo "ERROR: Invalid JSON from mcpchecker"
-          exit 1
-        fi
-
     # ── Step 4: Aggregate results and write Tekton results ──
     - name: aggregate-results
       image: $(params.mcp-eval-image)
@@ -316,6 +311,11 @@ spec:
 
         if [ ! -f "$OUTPUT_FILE" ]; then
           echo "ERROR: Output file not found: $OUTPUT_FILE"
+          exit 1
+        fi
+
+        if ! python3 -c "import json; json.load(open('$OUTPUT_FILE'))" 2>/dev/null; then
+          echo "ERROR: mcpchecker output is not valid JSON"
           exit 1
         fi
 
