@@ -20,6 +20,13 @@ Pull requests targeting `main` build a temporary bundle tagged `on-pr-<sha>`.
 Pushes to `main` that change the Pipeline or its publish configuration publish
 a bundle tagged with the commit SHA. Pin that bundle's digest in consumers.
 
+Automatic tier selection uses `check-pr-label` version 0.3.0 or later. With
+`tiers: auto`, the Pipeline looks up labels in the repository specified by
+`git-url`. Set the optional `mirror-source` to the repository URL where the
+PRs or MRs are merged when building from a mirror. Only that repository is
+queried for labels. GitHub.com and GitLab are supported in either direction.
+Mirrors must preserve the upstream merge commit SHA and target branch.
+
 ## Supported Task catalog
 
 | Task | Version | Responsibility |
@@ -27,7 +34,7 @@ a bundle tagged with the commit SHA. Pin that bundle's digest in consumers.
 | [aeh-skill-eval](task/aeh-skill-eval/README.md) | 3.1.0 | Evaluate the package; emit schema-2 signed scores and attach complete reports |
 | [verify-plugin-evidence](task/verify-plugin-evidence/README.md) | 1.0.0 | Bind actual image, package inventory, report hashes and score evidence |
 | [collect-plugin-context](task/collect-plugin-context/README.md) | 1.0.0 | Collect ownership, lifecycle and requested Compass observations |
-| [check-pr-label](task/check-pr-label/README.md) | 0.2.3 | Select optional Tier 2 from the `evaluate` label on a GitHub PR or GitLab MR, including mirrored builds |
+| [check-pr-label](task/check-pr-label/README.md) | 0.3.0 | Select optional Tier 2 from the `evaluate` label on a GitHub PR or GitLab MR, including mirrored builds |
 
 Tier 1 is always selected. The label is not required for redhat-only. Missing
 behavior stays unavailable. Task success records evidence collection/execution;

@@ -13,10 +13,10 @@ pipeline = yaml.safe_load((ROOT / f"pipelines/{NAME}/{NAME}.yaml").read_text())
 assert pipeline["kind"] == "Pipeline" and pipeline["metadata"]["name"] == NAME
 
 spec = pipeline["spec"]
-params = {item["name"] for item in spec["params"]}
+params = {item["name"]: item for item in spec["params"]}
 assert len(params) == len(spec["params"]), "Duplicate Pipeline parameter"
 references = set(re.findall(r"\$\(params\.([\w-]+)\)", yaml.safe_dump(spec)))
-assert references <= params, f"Undeclared Pipeline parameters: {references - params}"
+assert references <= params.keys(), f"Undeclared Pipeline parameters: {references - params.keys()}"
 
 tasks = {task["name"]: task for task in spec["tasks"]}
 bundles = {
@@ -41,6 +41,11 @@ for task_name, (name, bundle_param) in bundles.items():
     supplied = {item["name"] for item in task["params"]}
     assert supplied <= declared, f"{task_name} unknown inputs: {supplied - declared}"
     assert required <= supplied, f"{task_name} missing inputs: {required - supplied}"
+
+assert params["mirror-source"]["default"] == ""
+label_lookup = {item["name"]: item["value"] for item in tasks["select-evaluation-tiers"]["params"]}
+assert label_lookup["source-url"] == "$(params.git-url)"
+assert label_lookup["mirror-source"] == "$(params.mirror-source)"
 
 evaluation = {item["name"]: item["value"] for item in tasks["evaluate-skill"]["params"]}
 assert evaluation["compass-token-key"] == "$(params.compass-token-key)"
