@@ -34,11 +34,13 @@ spec:
   workspaces:
     - name: source
       description: Workspace containing the MCP server source to evaluate.
+    - name: reports
+      description: Workspace for persistent report and result output (write reports here so they survive beyond this task's pod).
   results:
     - name: static-eval-passed
       description: Whether all static evaluation gates passed (true/false).
     - name: report-path
-      description: Workspace-relative path to the static evaluation reports directory.
+      description: Path to the static evaluation summary JSON, relative to the reports workspace root.
   steps:
     - name: scan
       image: $(params.mcp-eval-image)
@@ -63,7 +65,7 @@ spec:
         TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
 
         SOURCE_DIR="$(workspaces.source.path)/$SOURCE_SUBDIR"
-        RESULTS_DIR="$(workspaces.source.path)/results"
+        RESULTS_DIR="$(workspaces.reports.path)/results"
         mkdir -p "$RESULTS_DIR"
 
         # licensee (Rugged/libgit2) refuses to open a repo whose directory is not
@@ -102,8 +104,8 @@ spec:
         TASK_NAME_NO_TA="${TASK_NAME%-oci-ta}"
         TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
 
-        RESULTS_DIR="$(workspaces.source.path)/results"
-        REPORTS_DIR="$(workspaces.source.path)/reports"
+        RESULTS_DIR="$(workspaces.reports.path)/results"
+        REPORTS_DIR="$(workspaces.reports.path)/reports"
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
         # Run gate module and extract passed flag from summary

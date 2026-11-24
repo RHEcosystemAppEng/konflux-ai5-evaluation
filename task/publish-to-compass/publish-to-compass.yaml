@@ -69,8 +69,8 @@ spec:
         Relative path to the Kubernetes Job template (from task directory).
         Override with an absolute path if needed.
   workspaces:
-    - name: source
-      description: Workspace containing the facts directory.
+    - name: reports
+      description: Workspace containing the facts directory to publish.
     - name: target-kubeconfig
       description: >-
         Kubeconfig for the target cluster. Must contain a file named
@@ -154,7 +154,7 @@ spec:
         RUN_ID=$(printf '%s' "$_ID" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-40)
         export JOB_NAME="${TASK_NAME}-${RUN_ID}"
 
-        FACTS_DIR="$(workspaces.source.path)/$FACTS_DIR"
+        FACTS_DIR="$(workspaces.reports.path)/$FACTS_DIR"
 
         if [ ! -d "$FACTS_DIR" ] || [ -z "$(ls "$FACTS_DIR"/*.json 2>/dev/null)" ]; then
           echo "No fact files found in $FACTS_DIR; skipping publish"
@@ -167,10 +167,10 @@ spec:
         envsubst \
           '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${CONFIGMAP_NAME} ${COMPASS_SECRET} ${CA_SECRET} ${DRY_RUN} ${TASK_MODULE}' \
           < "/opt/${TASK_MODULE}/${JOB_TEMPLATE}" \
-          > "$(workspaces.source.path)/compass-publish-job.yaml"
+          > "$(workspaces.reports.path)/compass-publish-job.yaml"
 
         echo "Generated Job manifest:"
-        cat "$(workspaces.source.path)/compass-publish-job.yaml"
+        cat "$(workspaces.reports.path)/compass-publish-job.yaml"
 
     - name: run-publish-job
       image: registry.redhat.io/openshift4/ose-cli:latest
@@ -201,7 +201,7 @@ spec:
         RUN_ID=$(printf '%s' "$_ID" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-40)
         JOB_NAME="${TASK_NAME}-${RUN_ID}"
 
-        FACTS_DIR="$(workspaces.source.path)/$FACTS_DIR"
+        FACTS_DIR="$(workspaces.reports.path)/$FACTS_DIR"
 
         # Check if prepare step skipped (no fact files)
         if [ -f "$(results.publish-status.path)" ]; then
@@ -216,7 +216,7 @@ spec:
         echo "Created ConfigMap '$CONFIGMAP_NAME'"
 
         # Apply the Job
-        oc apply -f "$(workspaces.source.path)/compass-publish-job.yaml" --namespace="$NAMESPACE"
+        oc apply -f "$(workspaces.reports.path)/compass-publish-job.yaml" --namespace="$NAMESPACE"
 
         # Wait for completion
         DEADLINE=$((SECONDS + JOB_TIMEOUT))

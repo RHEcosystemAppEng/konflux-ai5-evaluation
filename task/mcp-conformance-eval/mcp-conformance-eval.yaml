@@ -88,8 +88,8 @@ spec:
         Relative path to the Kubernetes Job template (from task directory).
         Override with an absolute path if needed.
   workspaces:
-    - name: source
-      description: Workspace for the reports directory.
+    - name: reports
+      description: Workspace for persistent report and result output.
     - name: target-kubeconfig
       description: >-
         Kubeconfig for the target cluster. Must contain a file named
@@ -98,7 +98,7 @@ spec:
     - name: conformance-eval-passed
       description: Whether conformance evaluation passed (no check FAILED in block mode).
     - name: report-path
-      description: Workspace-relative path to the conformance evaluation reports directory.
+      description: Path to the conformance evaluation summary JSON, relative to the reports workspace root.
   steps:
     # ── Step 1: Copy secrets to ephemeral namespace ──
     - name: setup
@@ -181,10 +181,10 @@ spec:
         envsubst \
           '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${SERVER_URL} ${TIMEOUT} ${OPENAPI_URL} ${COMPASS_SECRET} ${CA_SECRET} ${TASK_MODULE}' \
           < "/opt/${TASK_MODULE}/${JOB_TEMPLATE}" \
-          > "$(workspaces.source.path)/conformance-eval-job.yaml"
+          > "$(workspaces.reports.path)/conformance-eval-job.yaml"
 
         echo "Generated Job manifest:"
-        cat "$(workspaces.source.path)/conformance-eval-job.yaml"
+        cat "$(workspaces.reports.path)/conformance-eval-job.yaml"
 
     # ── Step 3: Apply Job and collect results ──
     - name: run-probe-job
@@ -228,9 +228,9 @@ spec:
         fi
 
         # Apply the Job
-        oc apply -f "$(workspaces.source.path)/conformance-eval-job.yaml" --namespace="$NAMESPACE"
+        oc apply -f "$(workspaces.reports.path)/conformance-eval-job.yaml" --namespace="$NAMESPACE"
 
-        RESULTS_DIR="$(workspaces.source.path)/results"
+        RESULTS_DIR="$(workspaces.reports.path)/results"
         mkdir -p "$RESULTS_DIR"
         find "$RESULTS_DIR" -maxdepth 1 -type f -name '*-check.json' -delete
 
@@ -299,8 +299,8 @@ spec:
         # Derive Python module name from task name (no export needed for bash command)
         TASK_MODULE="${TASK_NAME//-/_}"
 
-        RESULTS_DIR="$(workspaces.source.path)/results"
-        REPORTS_DIR="$(workspaces.source.path)/reports"
+        RESULTS_DIR="$(workspaces.reports.path)/results"
+        REPORTS_DIR="$(workspaces.reports.path)/reports"
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
         # Run gate module and extract passed flag from summary

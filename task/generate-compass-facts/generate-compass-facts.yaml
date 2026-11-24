@@ -35,8 +35,8 @@ spec:
         Path to the scorecard YAML config file, relative to the task module.
         Defaults to the built-in config/scorecard.yaml.
   workspaces:
-    - name: source
-      description: Workspace with the summary directory.
+    - name: reports
+      description: Workspace containing the reports directory (input) and facts directory (output).
   results:
     - name: facts-dir
       description: Workspace-relative path to the generated facts directory.
@@ -65,8 +65,8 @@ spec:
         # Save the workspace-relative path for the result (as documented)
         FACTS_DIR_RELATIVE="$FACTS_DIR"
 
-        SUMMARY_DIR="$(workspaces.source.path)/$SUMMARY_DIR"
-        FACTS_DIR="$(workspaces.source.path)/$FACTS_DIR"
+        SUMMARY_DIR="$(workspaces.reports.path)/$SUMMARY_DIR"
+        FACTS_DIR="$(workspaces.reports.path)/$FACTS_DIR"
 
         echo "=== Generating fact payloads ==="
         python -m "${TASK_MODULE}.scripts.run_generate_compass_facts" \

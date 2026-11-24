@@ -34,13 +34,16 @@ spec:
       default: "."
   results:
     - name: report-path
-      description: Workspace-relative path to the static evaluation reports
-        directory.
+      description: Path to the static evaluation summary JSON, relative to
+        the reports workspace root.
     - name: static-eval-passed
       description: Whether all static evaluation gates passed (true/false).
   volumes:
     - name: workdir
       emptyDir: {}
+  workspaces:
+    - name: reports
+      description: Workspace for persistent report and result output (write reports here so they survive beyond this task's pod).
   steps:
     - name: use-trusted-artifact
       image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:d7e9f457d819b91d5f4b62effea105d54c6e54bedcc3afb2a7a9fcaaf752076b
@@ -70,7 +73,7 @@ spec:
         TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
 
         SOURCE_DIR="/var/workdir/source/$SOURCE_SUBDIR"
-        RESULTS_DIR="/var/workdir/results"
+        RESULTS_DIR="$(workspaces.reports.path)/results"
         mkdir -p "$RESULTS_DIR"
 
         # licensee (Rugged/libgit2) refuses to open a repo whose directory is not
@@ -111,8 +114,8 @@ spec:
         TASK_NAME_NO_TA="${TASK_NAME%-oci-ta}"
         TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
 
-        RESULTS_DIR="/var/workdir/results"
-        REPORTS_DIR="/var/workdir/reports"
+        RESULTS_DIR="$(workspaces.reports.path)/results"
+        REPORTS_DIR="$(workspaces.reports.path)/reports"
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
         # Run gate module and extract passed flag from summary

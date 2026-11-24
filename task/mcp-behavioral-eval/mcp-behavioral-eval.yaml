@@ -91,15 +91,15 @@ spec:
       type: string
       description: Name of the MCP component being evaluated (from the Konflux snapshot)
   workspaces:
-    - name: source
-      description: Shared workspace for storing results
+    - name: reports
+      description: Workspace for persistent report and result output.
     - name: target-kubeconfig
       description: >-
         Kubeconfig for the target cluster. Must contain a file named
         "kubeconfig".
   results:
     - name: report-path
-      description: Workspace-relative path to the MCP behavioral evaluation reports directory.
+      description: Path to the behavioral evaluation summary JSON, relative to the reports workspace root.
   steps:
     # ── Step 1: Copy LLM secrets to ephemeral namespace ──
     - name: setup
@@ -205,10 +205,10 @@ spec:
         envsubst \
           '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${MCP_URL} ${AGENT_SECRET} ${JUDGE_SECRET} ${CA_SECRET} ${SUITES_DIR}' \
           < "/opt/${TASK_MODULE}/${JOB_TEMPLATE}" \
-          > "$(workspaces.source.path)/mcp-behavioral-eval-job.yaml"
+          > "$(workspaces.reports.path)/mcp-behavioral-eval-job.yaml"
 
         echo "Generated Job manifest:"
-        cat "$(workspaces.source.path)/mcp-behavioral-eval-job.yaml"
+        cat "$(workspaces.reports.path)/mcp-behavioral-eval-job.yaml"
 
     # ── Step 3: Apply Job and collect results ──
     - name: run-mcpchecker-job
@@ -235,7 +235,7 @@ spec:
         JOB_NAME="${TASK_NAME}-${RUN_ID}"
 
         # Apply the Job
-        oc apply -f "$(workspaces.source.path)/mcp-behavioral-eval-job.yaml" --namespace="$NAMESPACE"
+        oc apply -f "$(workspaces.reports.path)/mcp-behavioral-eval-job.yaml" --namespace="$NAMESPACE"
 
         # Wait for Job completion
         TIMEOUT=$JOB_TIMEOUT
@@ -263,7 +263,7 @@ spec:
         done
 
         # Collect Job output
-        RESULTS_DIR="$(workspaces.source.path)/results"
+        RESULTS_DIR="$(workspaces.reports.path)/results"
         mkdir -p "$RESULTS_DIR"
 
         RAW_LOGS="$RESULTS_DIR/$JOB_NAME-logs.txt"
@@ -304,8 +304,8 @@ spec:
         _ID="${PIPELINE_RUN_ID:-$TASK_RUN_UID}"
         RUN_ID=$(printf '%s' "$_ID" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-40)
         JOB_NAME="${TASK_NAME}-${RUN_ID}"
-        RESULTS_DIR="$(workspaces.source.path)/results"
-        REPORTS_DIR="$(workspaces.source.path)/reports"
+        RESULTS_DIR="$(workspaces.reports.path)/results"
+        REPORTS_DIR="$(workspaces.reports.path)/reports"
         OUTPUT_FILE="$RESULTS_DIR/$JOB_NAME-output.json"
         REPORT_REL="reports/behavioral-eval-summary.json"
 
