@@ -6,18 +6,18 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: 0.2.1
+    app.kubernetes.io/version: 0.2.2
 spec:
-  description: Select explicit evaluation tiers, or opt into Tier 2 using the merged MR for this exact commit and
-    target branch. API and TLS failures fail the task.
+  description: Select explicit evaluation tiers, or check the merged GitLab MR or upstream GitHub PR for the
+    exact commit and target branch. API and TLS failures fail the task.
   params:
   - name: tiers
     type: string
     default: auto
-    description: auto uses the merged-MR label; 1 and 1,2 explicitly select tiers without an API lookup.
+    description: auto uses the merged change's label; 1 and 1,2 explicitly select tiers without an API lookup.
   - name: target-branch
     type: string
-    description: Exact destination branch of the merged MR; required with auto.
+    description: Exact destination branch of the merged MR or PR; required with auto.
   - name: ca-bundle-configmap
     type: string
     default: trusted-ca
@@ -28,7 +28,7 @@ spec:
   - name: label-name
     type: string
     default: evaluate
-    description: Label that must be present on the merged MR for this result to be "true".
+    description: Label that selects Tier 2 on a matching merged MR or PR.
   - name: gitlab-server-url
     type: string
     default: https://gitlab.cee.redhat.com
@@ -46,6 +46,18 @@ spec:
     type: string
     default: password
     description: Key within git-token-secret-name holding the GitLab access token.
+  - name: github-repository
+    type: string
+    default: ""
+    description: Optional GitHub.com owner/repo to check for the same commit and branch when GitLab has no matching merged MR.
+  - name: github-token-secret-name
+    type: string
+    default: github-pr-read-token
+    description: Optional Secret containing a GitHub token with read access to pull requests.
+  - name: github-token-secret-key
+    type: string
+    default: token
+    description: Key within github-token-secret-name holding the GitHub token.
   results:
   - name: should-evaluate
     description: true when Tier 2 was selected, false otherwise.
@@ -73,6 +85,14 @@ spec:
           name: $(params.git-token-secret-name)
           key: $(params.git-token-secret-key)
           optional: true
+    - name: GITHUB_UPSTREAM_REPOSITORY
+      value: $(params.github-repository)
+    - name: GITHUB_PR_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: $(params.github-token-secret-name)
+          key: $(params.github-token-secret-key)
+          optional: true
     script: |
       #!/usr/bin/env python3
       import json
@@ -84,6 +104,64 @@ spec:
       import urllib.parse
       import urllib.request
       from pathlib import Path
+
+
+      def matching_github_pr(repository, sha, branch, context):
+          if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+", repository)
+                  or repository.endswith(("/.", "/.."))):
+              raise SystemExit("github-repository must be a GitHub.com owner/repo")
+
+          token = os.environ.get("GITHUB_PR_TOKEN", "")
+          matches = []
+          url = f"https://api.github.com/repos/{repository}/commits/{sha}/pulls"
+          for page in range(1, 11):
+              request = urllib.request.Request(
+                  f"{url}?per_page=100&page={page}",
+                  headers={"Accept": "application/vnd.github+json"},
+              )
+              if token:
+                  # Send the token only to the configured GitHub API endpoint.
+                  request.add_unredirected_header("Authorization", f"Bearer {token}")
+              try:
+                  with urllib.request.urlopen(request, context=context, timeout=30) as response:
+                      rows = json.load(response)
+                      links = response.headers.get("Link", "")
+              except urllib.error.HTTPError as error:
+                  with error:
+                      if page == 1 and error.code == 422:
+                          try:
+                              body = json.load(error)
+                          except (OSError, ValueError):
+                              body = None
+                          # A GitLab-only push can have no corresponding GitHub commit.
+                          if isinstance(body, dict) and body.get("message") == f"No commit found for SHA: {sha}":
+                              return None
+                  raise SystemExit(f"Cannot resolve evaluation label from GitHub: HTTP {error.code}") from error
+              except (urllib.error.URLError, OSError, ValueError) as error:
+                  raise SystemExit(f"Cannot resolve evaluation label from GitHub: {getattr(error, 'reason', error)}") from error
+
+              if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                  raise SystemExit("Invalid GitHub PR response")
+              for row in rows:
+                  if row.get("state") != "closed" or not row.get("merged_at") or row.get("merge_commit_sha") != sha:
+                      continue
+                  base = row.get("base")
+                  base_repository = base.get("repo") if isinstance(base, dict) else None
+                  if not isinstance(base_repository, dict) or not isinstance(base_repository.get("full_name"), str):
+                      raise SystemExit("Invalid GitHub PR base repository")
+                  if not isinstance(base.get("ref"), str):
+                      raise SystemExit("Invalid GitHub PR base branch")
+                  if base["ref"] == branch and base_repository["full_name"].casefold() == repository.casefold():
+                      matches.append(row)
+              if not re.search(r'<[^>]+>;\s*rel="next"', links):
+                  break
+          else:
+              raise SystemExit("Too many associated GitHub PRs to resolve evaluation safely")
+
+          if len(matches) > 1:
+              raise SystemExit("Ambiguous merged GitHub PR for this exact commit and target branch")
+          return matches[0] if matches else None
+
 
       mode = os.environ["TIERS"]
       if mode not in {"auto", "1", "1,2"}:
@@ -142,11 +220,24 @@ spec:
                   time.sleep(2)
           if len(matches) > 1:
               raise SystemExit("Ambiguous merged MR for this exact commit and target branch")
-          labeled = bool(matches and os.environ["LABEL_NAME"] in (matches[0].get("labels") or []))
+          label = os.environ["LABEL_NAME"]
+          repository = os.environ["GITHUB_UPSTREAM_REPOSITORY"]
+          if matches or not repository:
+              labeled = bool(matches and label in (matches[0].get("labels") or []))
+              source = "Merged MR: " + str(matches[0].get("iid") if matches else "none")
+          else:
+              pull = matching_github_pr(repository, sha, branch, context)
+              labels = pull.get("labels") if pull else []
+              if not isinstance(labels, list) or any(
+                  not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in labels
+              ):
+                  raise SystemExit("Invalid GitHub PR labels")
+              labeled = any(item["name"] == label for item in labels)
+              source = "Merged GitHub PR: " + str(pull.get("number") if pull else "none")
           selected = "1,2" if labeled else "1"
-          print("Merged MR: " + str(matches[0].get("iid") if matches else "none") + "; selected tiers: " + selected)
+          print(source + "; selected tiers: " + selected)
       else:
-          print("Explicit tiers: " + selected + "; GitLab label lookup not needed")
+          print("Explicit tiers: " + selected + "; label lookup skipped")
 
       Path("$(results.tiers.path)").write_text(selected)
       Path("$(results.should-evaluate.path)").write_text("true" if selected == "1,2" else "false")

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Add an optional GitHub repository lookup for mirrored commits without a matching GitLab MR.
+- Support anonymous lookup for public repositories and an optional read token for authenticated requests.
+
 ## 0.2.1
 
 - Default to the native `trusted-ca` ConfigMap and report actionable GitLab connection errors.
