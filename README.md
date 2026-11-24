@@ -1,11 +1,24 @@
-# Reusable Konflux plugin build Tasks
+# Reusable Konflux plugin builds
 
-These versioned Tekton Tasks produce build evidence for native, per-plugin
-Konflux Components. Official Enterprise Contract policies make market decisions.
-The managed release team owns its ECP, RPA, release pipeline and credentials.
+The Tekton build Pipeline and its versioned Tasks produce signed build evidence
+for native, per-plugin Konflux Components. `plugin-pipeline` owns Enterprise
+Contract integration scenarios, policies, and managed release wiring.
 
 Task layout, versioning, linting, and integration tests follow `task-repo-shared-ci`.
 [Shared CI setup](SHARED-CI.md)
+
+## Build Pipeline
+
+[`plugin-component-build`](pipelines/plugin-component-build/plugin-component-build.yaml)
+packages and evaluates one plugin, then produces the image and evidence for EC.
+Its PipelineRun supplies the Task bundle and runtime image digests as parameters.
+Build the Pipeline bundle using `tekton-bundle-builder-oci-ta` with
+`pipelines/plugin-component-build` as the Component source context. Set the
+generated PipelineRun's `path-context` to
+`pipelines/plugin-component-build/plugin-component-build.yaml`.
+Pull requests targeting `main` build a temporary bundle tagged `on-pr-<sha>`.
+Pushes to `main` that change the Pipeline or its publish configuration publish
+a bundle tagged with the commit SHA. Pin that bundle's digest in consumers.
 
 ## Supported Task catalog
 
@@ -22,16 +35,15 @@ it does not grant market eligibility. Tekton Chains includes the declared result
 in signed image provenance. Native EC checks approved producers and every skill.
 
 Start with [onboarding](docs/onboarding.md). Task READMEs describe interfaces,
-Secrets and workspaces. The native reference build is
-[plugin-pipeline](https://gitlab.cee.redhat.com/ai5-marketplace/plugin-pipeline/-/blob/per-plugin-componnent/konflux/pipelines/plugin-component-build.yaml).
+Secrets and workspaces.
 
 Preparation uses the official Konflux `run-script-oci-ta` Task and the approved
-`plugin-pipeline` tools image. The shared build Pipeline owns its command and
-result wiring; this catalog contains only the four domain Tasks above.
+`plugin-pipeline` tools image. The build Pipeline owns the command and result
+wiring.
 
 ## Publication and validation
 
-Bundles are published manually under
+Task bundles can also be published manually under
 `quay.io/ecosystem-appeng/konflux-skill-evaluation/<task-name>:<version>`:
 
 ```sh
@@ -49,6 +61,7 @@ Tekton test Pipelines under each Task's `tests/` directory.
 ```sh
 hack/checkton-local.sh
 hack/missing-ta-tasks.sh
+python3 hack/check-plugin-component-build.py
 ```
 
 Legacy Matrix aggregation, catalog-SHA discovery/registration Tasks and their

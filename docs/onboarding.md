@@ -2,7 +2,7 @@
 
 One plugin maps to one Konflux Component, with scoped PR/push invocations.
 Use the native
-[reference build pipeline](https://gitlab.cee.redhat.com/ai5-marketplace/plugin-pipeline/-/blob/per-plugin-componnent/konflux/pipelines/plugin-component-build.yaml).
+[plugin build Pipeline](../pipelines/plugin-component-build/plugin-component-build.yaml).
 Do not add a catalog-wide fanout, registered-SHA bot or a second market evaluator.
 
 ## Developer team
@@ -11,9 +11,10 @@ Do not add a catalog-wide fanout, registered-SHA bot or a second market evaluato
    authoring content. Select the plugin ID explicitly.
 2. Create the native Component/ImageRepository and normal PaC PR/push invocations.
    Scope triggers to that plugin and relevant shared build inputs.
-3. Pin preparation, evaluation, evidence-verification and context-collection
-   bundles. Feed every packaged skill into evaluation. Standard Konflux image
-   build and scanning Tasks remain in place.
+3. Pin the build Pipeline bundle and the preparation, label selection,
+   evaluation, evidence-verification and context-collection Task bundles. Feed
+   every packaged skill into evaluation. The Pipeline uses standard Konflux image
+   build and scanning Tasks.
 4. Provision existing approved evaluation, registry, PostgreSQL and Compass
    credentials through Secrets. Configure the actual Compass Secret key and
    trusted CA. Never put credentials in source or Task parameters.
@@ -39,7 +40,7 @@ it does not push to the target branch or merge the MR.
 
 The release pipeline's optional per-skill report explains the official EC result.
 It does not replace EC or make eligibility decisions. Policy and release resource
-installation are maintained in the `plugin-pipeline` repository, not this Task catalog.
+installation are maintained in the `plugin-pipeline` repository.
 
 ## Validation
 

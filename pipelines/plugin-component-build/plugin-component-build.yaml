@@ -1,0 +1,925 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: plugin-component-build
+  labels:
+    app.kubernetes.io/version: 1.0.0
+spec:
+  description: Build, evaluate and collect evidence for exactly one plugin. Official EC policies decide market eligibility
+    from Chains-signed task results.
+  params:
+  - description: Source Repository URL
+    name: git-url
+    type: string
+  - default: ''
+    description: Revision of the Source Repository
+    name: revision
+    type: string
+  - description: Fully Qualified Output Image
+    name: output-image
+    type: string
+  - default: .
+    description: Path to the source code of an application's component from where to build image.
+    name: path-context
+    type: string
+  - default: .
+    description: Repository-relative directory containing the plugin source contract. The preparation artifact is rooted here.
+    name: source-subdir
+    type: string
+  - default: containers/plugin/Containerfile
+    description: Path to the Dockerfile inside the context specified by parameter path-context
+    name: dockerfile
+    type: string
+  - default: 'false'
+    description: Skip checks against built image
+    name: skip-checks
+    type: string
+  - default: 'false'
+    description: Execute the build with network isolation
+    name: hermetic
+    type: string
+  - default: ''
+    description: Build dependencies to be prefetched
+    name: prefetch-input
+    type: string
+  - default: ''
+    description: Image tag expiration time, time values could be something like 1h, 2d, 3w for hours, days, and weeks, respectively.
+    name: image-expires-after
+    type: string
+  - default: 'false'
+    description: Build a source image.
+    name: build-source-image
+    type: string
+  - default: 'false'
+    description: Add built image into an OCI image index
+    name: build-image-index
+    type: string
+  - default: docker
+    description: The format for the resulting image's mediaType. Valid values are oci or docker.
+    name: buildah-format
+    type: string
+  - default: 'false'
+    description: Enable cache proxy configuration
+    name: enable-cache-proxy
+  - default: 'true'
+    description: Use the package registry proxy when prefetching dependencies
+    name: enable-package-registry-proxy
+  - default: .
+    description: Target directories in component's source code to scan with SAST tools. Multiple values should be separated
+      with commas.
+    name: sast-target-dirs
+    type: string
+  - default: []
+    description: Array of --build-arg values ("arg=value" strings) for buildah
+    name: build-args
+    type: array
+  - default: ''
+    description: Path to a file with build arguments for buildah, see https://www.mankier.com/1/buildah-build#--build-arg-file
+    name: build-args-file
+    type: string
+  - default: 'false'
+    description: Whether to enable privileged mode, should be used only with remote VMs
+    name: privileged-nested
+    type: string
+  - default: ''
+    description: Sets the image created time and the SOURCE_DATE_EPOCH build argument. On its own, it does not change file
+      timestamps inside the layers (set rewrite-timestamp to "true" for that). Leave empty to keep the actual build time.
+    name: source-date-epoch
+    type: string
+  - default: 'false'
+    description: When "true", clamp file modification times in the image layers to at most source-date-epoch. Does nothing
+      unless source-date-epoch is set.
+    name: rewrite-timestamp
+    type: string
+  - default: 'false'
+    description: When "true", omit the build history (history timestamps, layer metadata, etc.) from the resulting image.
+    name: omit-history
+    type: string
+  - name: tiers
+    type: string
+    default: auto
+    description: 1 for Tier 1; 1,2 for both; auto opts into Tier 2 using the merged MR evaluate label.
+  - name: n-concurrent
+    type: string
+    default: '1'
+    description: Maximum AEH trial cases to run concurrently per skill evaluation.
+  - name: persist
+    type: string
+    default: postgres,compass
+    description: 'Comma-separated application destinations: postgres,s3,compass; empty disables publication.'
+  - name: persistence-required
+    type: string
+    default: 'true'
+    description: Fail required publication gates when a selected destination fails.
+  - name: evaluation-image
+    type: string
+    description: Complete CLI runtime with installed Tier 1 scanners and unchanged AEH.
+  - name: trial-image
+    type: string
+    description: Trial runtime image pullable by the workload cluster.
+  - name: llm-secret
+    type: string
+    default: llm-credentials
+    description: Konflux Secret containing api-key for review and suite-level judging.
+  - name: llm-api-base
+    type: string
+    default: https://lite-llm-lite-llm.apps.ai5-devel.apps.eco-engineering.lab.eng.tlv2.redhat.com/v1
+    description: OpenAI-compatible review and judge API endpoint.
+  - name: llm-model
+    type: string
+    default: gemini-2.5-flash
+    description: Model for submission and optional skill review.
+  - name: agent-api-base
+    type: string
+    default: https://lite-llm-lite-llm.apps.ai5-devel.apps.eco-engineering.lab.eng.tlv2.redhat.com
+    description: Agent endpoint; Claude through LiteLLM uses the gateway root.
+  - name: skill-review
+    type: string
+    default: 'false'
+    description: Enable advisory LLM review of SKILL.md.
+  - name: insecure-ssl
+    type: string
+    default: 'false'
+    description: Restore internal evaluation endpoint TLS bypass for agents, judges, reviews, Compass publishing, and the
+      database route.
+  - name: submission-review
+    type: string
+    default: auto
+    description: Honor submission metadata (auto), enable review (on), or disable it (off).
+  - name: continue-on-tier1-failure
+    type: string
+    default: 'false'
+    description: Run selected trials despite blocking Tier 1 findings; retain failed verdicts.
+  - name: aeh-model-override
+    type: string
+    default: ''
+    description: Override the submission execution model.
+  - name: aeh-judge-model-override
+    type: string
+    default: ''
+    description: Override the submission judge model.
+  - name: aeh-kubeconfig-secret
+    type: string
+    default: agentic-plugins-konflux-sa-kubeconfig
+    description: Konflux Secret containing workload kubeconfig under key kubeconfig.
+  - name: workload-namespace
+    type: string
+    default: agentic-plugins-evaluation
+    description: Namespace for remote trial pods.
+  - name: workload-credentials-secret
+    type: string
+    default: llm-credentials
+    description: Existing workload Secret with native provider SDK keys.
+  - name: workload-service-account
+    type: string
+    default: ''
+    description: Trial service account; empty uses native AEH defaults.
+  - name: database-secret
+    type: string
+    default: ab-eval-db-credentials
+    description: Konflux Secret with database-url and optional database-tls-route-host.
+  - name: s3-secret
+    type: string
+    default: minio-credentials
+    description: Konflux Secret with endpoint-url, root-user, and root-password.
+  - name: s3-bucket
+    type: string
+    default: ab-eval-reports
+    description: S3 report bucket.
+  - name: compass-secret
+    type: string
+    default: compass-facts-api
+    description: Konflux Secret containing token for Compass publication.
+  - name: compass-token-key
+    type: string
+    default: token
+    description: Key in compass-secret injected into the evaluator as ABEVAL_COMPASS_TOKEN.
+  - name: ca-bundle-configmap
+    type: string
+    default: trusted-ca-bundle
+    description: Optional trusted CA ConfigMap with ca-bundle.crt.
+  - name: otel-exporter-endpoint
+    type: string
+    default: ''
+    description: Optional OTLP/gRPC tracing endpoint.
+  - name: command-timeout
+    type: string
+    default: '7200'
+    description: Per-command AEH timeout in seconds.
+  - name: timeout-retries
+    type: string
+    default: '1'
+    description: Additional timeout-only attempts per AEH arm (0-5).
+  - name: plugin-id
+    type: string
+  - name: tools-image
+    type: string
+  - name: prepare-task-bundle
+    type: string
+  - name: evaluation-task-bundle
+    type: string
+  - name: label-task-bundle
+    type: string
+    description: Approved digest-pinned check-pr-label task bundle.
+  - name: target-branch
+    type: string
+    description: Destination branch used to identify the exact merged MR.
+  - name: gitlab-server-url
+    type: string
+    default: https://gitlab.cee.redhat.com
+  - name: gitlab-project-path
+    type: string
+    default: ai5-marketplace%2Fagentic-plugins
+  - name: gitlab-token-secret
+    type: string
+    default: agentic-plugins-gitlab-sa
+  - name: gitlab-ca-bundle-configmap
+    type: string
+    default: trusted-ca
+    description: Native GitLab TLS trust bundle; independent of evaluation endpoint trust.
+  - name: evidence-image
+    type: string
+  - name: verify-task-bundle
+    type: string
+  - name: compass-task-bundle
+    type: string
+  - name: compass-url
+    type: string
+  - name: soundcheck-checks
+    type: string
+  results:
+  - name: EVALUATION_TIERS
+    description: Explicit executed tiers selected from the merged-MR label or a manual override.
+    value: $(tasks.select-evaluation-tiers.results.tiers)
+  - description: ''
+    name: IMAGE_URL
+    value: $(tasks.build-image-index.results.IMAGE_URL)
+  - description: ''
+    name: IMAGE_DIGEST
+    value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+  - description: ''
+    name: CHAINS-GIT_URL
+    value: $(tasks.clone-repository.results.url)
+  - description: ''
+    name: CHAINS-GIT_COMMIT
+    value: $(tasks.clone-repository.results.commit)
+  - name: TEST_OUTPUT_TIER_A
+    type: string
+    description: Aggregated Tier 1 evaluation result.
+    value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_A)
+  - name: TEST_OUTPUT_TIER_B
+    type: string
+    description: Aggregated informational Tier 2 result.
+    value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_B)
+  - name: TEST_OUTPUT_PUBLICATION
+    type: string
+    description: Aggregated application persistence and OCI attachment result.
+    value: $(tasks.evaluate-skill.results.TEST_OUTPUT_PUBLICATION)
+  - name: TEST_OUTPUT
+    description: Aggregated blocking Tier 1 result.
+    value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_A)
+  - name: TEST_OUTPUT_TIER_B_AGGREGATE
+    description: Aggregated informational Tier 2 result.
+    value: $(tasks.evaluate-skill.results.TEST_OUTPUT_TIER_B)
+  - name: TEST_OUTPUT_PUBLICATION_AGGREGATE
+    description: Aggregated required publication result.
+    value: $(tasks.evaluate-skill.results.TEST_OUTPUT_PUBLICATION)
+  tasks:
+  - name: init
+    params:
+    - name: enable-cache-proxy
+      value: $(params.enable-cache-proxy)
+    taskRef:
+      params:
+      - name: name
+        value: init
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-init:0.4.3@sha256:7854d7babe4136e53e337f6433d952532314433b48bb62b422ddc02700934d85
+      - name: kind
+        value: task
+      resolver: bundles
+  - name: clone-repository
+    params:
+    - name: url
+      value: $(params.git-url)
+    - name: revision
+      value: $(params.revision)
+    - name: ociStorage
+      value: $(params.output-image).git
+    - name: ociArtifactExpiresAfter
+      value: $(params.image-expires-after)
+    runAfter:
+    - init
+    taskRef:
+      params:
+      - name: name
+        value: git-clone-oci-ta
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-git-clone-oci-ta:0.2.6@sha256:a3678910c2bf9187a66a96066193cb41046fbb7097160bf2be6a374ed5e49d30
+      - name: kind
+        value: task
+      resolver: bundles
+    workspaces:
+    - name: basic-auth
+      workspace: git-auth
+  - name: select-evaluation-tiers
+    runAfter:
+    - clone-repository
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: check-pr-label
+      - name: bundle
+        value: $(params.label-task-bundle)
+      - name: kind
+        value: task
+    params:
+    - name: current-sha
+      value: $(tasks.clone-repository.results.commit)
+    - name: tiers
+      value: $(params.tiers)
+    - name: target-branch
+      value: $(params.target-branch)
+    - name: label-name
+      value: evaluate
+    - name: gitlab-server-url
+      value: $(params.gitlab-server-url)
+    - name: gitlab-project-path
+      value: $(params.gitlab-project-path)
+    - name: git-token-secret-name
+      value: $(params.gitlab-token-secret)
+    - name: ca-bundle-configmap
+      value: $(params.gitlab-ca-bundle-configmap)
+  - name: prefetch-dependencies
+    params:
+    - name: input
+      value: $(params.prefetch-input)
+    - name: enable-package-registry-proxy
+      value: $(params.enable-package-registry-proxy)
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
+    - name: ociStorage
+      value: $(params.output-image).prefetch
+    - name: ociArtifactExpiresAfter
+      value: $(params.image-expires-after)
+    runAfter:
+    - clone-repository
+    taskRef:
+      params:
+      - name: name
+        value: prefetch-dependencies-oci-ta
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-prefetch-dependencies-oci-ta:0.10.3@sha256:0c386f2c26b46b978280c5c54caac26bcd524975f8f7cc06bb080ba00eae3ad4
+      - name: kind
+        value: task
+      resolver: bundles
+    workspaces:
+    - name: git-basic-auth
+      workspace: git-auth
+    - name: netrc
+      workspace: netrc
+  - name: prepare-plugin
+    runAfter:
+    - prefetch-dependencies
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: run-script-oci-ta
+      - name: bundle
+        value: $(params.prepare-task-bundle)
+      - name: kind
+        value: task
+    params:
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.prefetch-dependencies.results.SOURCE_ARTIFACT)
+    - name: SCRIPT_RUNNER_IMAGE
+      value: $(params.tools-image)
+    - name: SCRIPT
+      value: '#!/bin/sh
+
+        exec python -m src.component prepare-plugin --plugin $(params.plugin-id) --source-subdir $(params.source-subdir)
+
+        '
+    - name: SCRIPT_WORKDIR
+      value: /opt/plugin-pipeline
+    - name: SCRIPT_ARTIFACT_RELATIVE_PATH
+      value: $(params.source-subdir)
+    - name: HERMETIC
+      value: 'true'
+    - name: enableSymlinkCheck
+      value: 'true'
+    - name: ociStorage
+      value: $(params.output-image).prepared
+    - name: ociArtifactExpiresAfter
+      value: $(params.image-expires-after)
+    - name: caTrustConfigMapName
+      value: $(params.ca-bundle-configmap)
+  - name: build-container
+    params:
+    - name: IMAGE
+      value: $(params.output-image)
+    - name: DOCKERFILE
+      value: $(params.dockerfile)
+    - name: CONTEXT
+      value: $(params.path-context)
+    - name: HERMETIC
+      value: $(params.hermetic)
+    - name: PREFETCH_INPUT
+      value: $(params.prefetch-input)
+    - name: IMAGE_EXPIRES_AFTER
+      value: $(params.image-expires-after)
+    - name: COMMIT_SHA
+      value: $(tasks.clone-repository.results.commit)
+    - name: BUILD_ARGS
+      value:
+      - $(params.build-args[*])
+    - name: BUILD_ARGS_FILE
+      value: $(params.build-args-file)
+    - name: PRIVILEGED_NESTED
+      value: $(params.privileged-nested)
+    - name: SOURCE_URL
+      value: $(tasks.clone-repository.results.url)
+    - name: BUILDAH_FORMAT
+      value: $(params.buildah-format)
+    - name: HTTP_PROXY
+      value: $(tasks.init.results.http-proxy)
+    - name: NO_PROXY
+      value: $(tasks.init.results.no-proxy)
+    - name: SOURCE_DATE_EPOCH
+      value: $(params.source-date-epoch)
+    - name: REWRITE_TIMESTAMP
+      value: $(params.rewrite-timestamp)
+    - name: OMIT_HISTORY
+      value: $(params.omit-history)
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.prepare-plugin.results.SCRIPT_ARTIFACT)
+    - name: CACHI2_ARTIFACT
+      value: $(tasks.prefetch-dependencies.results.CACHI2_ARTIFACT)
+    - name: ADDITIONAL_BASE_IMAGES
+      value:
+      - $(tasks.prepare-plugin.results.SCRIPT_RUNNER_IMAGE_REFERENCE)
+    runAfter:
+    - prepare-plugin
+    taskRef:
+      params:
+      - name: name
+        value: buildah-oci-ta
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-buildah-oci-ta:0.12.3@sha256:3c57ec441d23c81d73df3b1f95cd5e800d53674fa0e8af784d81402e087e30bf
+      - name: kind
+        value: task
+      resolver: bundles
+  - name: build-image-index
+    params:
+    - name: IMAGE
+      value: $(params.output-image)
+    - name: ALWAYS_BUILD_INDEX
+      value: $(params.build-image-index)
+    - name: IMAGES
+      value:
+      - $(tasks.build-container.results.IMAGE_URL)@$(tasks.build-container.results.IMAGE_DIGEST)
+    - name: BUILDAH_FORMAT
+      value: $(params.buildah-format)
+    runAfter:
+    - build-container
+    taskRef:
+      params:
+      - name: name
+        value: build-image-index
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-build-image-index:0.4@sha256:654446d8ec028b20ed6ada8a96486ff16692a25192755aa04a99cea8e0afb7e2
+      - name: kind
+        value: task
+      resolver: bundles
+  - name: build-source-image
+    params:
+    - name: BINARY_IMAGE
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: BINARY_IMAGE_DIGEST
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.prepare-plugin.results.SCRIPT_ARTIFACT)
+    - name: CACHI2_ARTIFACT
+      value: $(tasks.prefetch-dependencies.results.CACHI2_ARTIFACT)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: source-build-oci-ta
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-source-build-oci-ta:0.3.2@sha256:45091b5022754d452b4de60c7d7f4c6e03626efff55f96e9af937400fe3506eb
+      - name: kind
+        value: task
+      resolver: bundles
+    when:
+    - input: $(params.build-source-image)
+      operator: in
+      values:
+      - 'true'
+  - name: deprecated-base-image-check
+    params:
+    - name: IMAGE_URL
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: IMAGE_DIGEST
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: deprecated-image-check
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-deprecated-image-check:0.5@sha256:0ccc688a77e9b7b0b8973c132a1e840844137e77f887be4a0bec8893b0776872
+      - name: kind
+        value: task
+      resolver: bundles
+    when:
+    - input: $(params.skip-checks)
+      operator: in
+      values:
+      - 'false'
+  - name: roxctl-scan
+    params:
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: roxctl-scan
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-roxctl-scan:0.1@sha256:8286d4dd5a337596ed4776d68152656abed9a464777dbb87b00256fd5987789e
+      - name: kind
+        value: task
+      resolver: bundles
+    when:
+    - input: $(params.skip-checks)
+      operator: in
+      values:
+      - 'false'
+  - name: ecosystem-cert-preflight-checks
+    params:
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: ecosystem-cert-preflight-checks
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-ecosystem-cert-preflight-checks:0.2@sha256:439014132f4521ea3221ea29b1fd83e48f9728c071db6edaf6b870550e5d89a6
+      - name: kind
+        value: task
+      resolver: bundles
+    when:
+    - input: $(params.skip-checks)
+      operator: in
+      values:
+      - 'false'
+  - name: sast-snyk-check
+    params:
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: TARGET_DIRS
+      value: $(params.sast-target-dirs)
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.prefetch-dependencies.results.SOURCE_ARTIFACT)
+    - name: CACHI2_ARTIFACT
+      value: $(tasks.prefetch-dependencies.results.CACHI2_ARTIFACT)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: sast-snyk-check-oci-ta
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-sast-snyk-check-oci-ta:0.5@sha256:17b9587eba53fabaab35061275306bfe1f99661d55e14e22f62321fa7cb5ff3e
+      - name: kind
+        value: task
+      resolver: bundles
+    when:
+    - input: $(params.skip-checks)
+      operator: in
+      values:
+      - 'false'
+  - name: clamav-scan
+    params:
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: clamav-scan
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-clamav-scan:0.3.4@sha256:22fb08a2d08000aadf22a9cbaaa8265ba70e25fe4e24d81a3f3e64440d9e6b5e
+      - name: kind
+        value: task
+      resolver: bundles
+    when:
+    - input: $(params.skip-checks)
+      operator: in
+      values:
+      - 'false'
+  - name: sast-shell-check
+    params:
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: TARGET_DIRS
+      value: $(params.sast-target-dirs)
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.prefetch-dependencies.results.SOURCE_ARTIFACT)
+    - name: CACHI2_ARTIFACT
+      value: $(tasks.prefetch-dependencies.results.CACHI2_ARTIFACT)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: sast-shell-check-oci-ta
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-sast-shell-check-oci-ta:0.1@sha256:d00c884c78489a52dc638e6ced0a01429670d0754f5b1305ad576709cf660312
+      - name: kind
+        value: task
+      resolver: bundles
+    when:
+    - input: $(params.skip-checks)
+      operator: in
+      values:
+      - 'false'
+  - name: sast-unicode-check
+    params:
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: TARGET_DIRS
+      value: $(params.sast-target-dirs)
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.prefetch-dependencies.results.SOURCE_ARTIFACT)
+    - name: CACHI2_ARTIFACT
+      value: $(tasks.prefetch-dependencies.results.CACHI2_ARTIFACT)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: sast-unicode-check-oci-ta
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-sast-unicode-check-oci-ta:0.4@sha256:15d654c9576b9c4ee1f78b09fce541acf9afe33f1c2363fd6219a79dbf62c95d
+      - name: kind
+        value: task
+      resolver: bundles
+    when:
+    - input: $(params.skip-checks)
+      operator: in
+      values:
+      - 'false'
+  - name: apply-tags
+    params:
+    - name: IMAGE_URL
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: IMAGE_DIGEST
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: apply-tags
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-apply-tags:0.3.1@sha256:c177fc2b2482b1299e713c51bf258eba4972c016ef260d9f45335c2550dc7b2b
+      - name: kind
+        value: task
+      resolver: bundles
+  - name: push-dockerfile
+    params:
+    - name: IMAGE
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: IMAGE_DIGEST
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: DOCKERFILE
+      value: $(params.dockerfile)
+    - name: CONTEXT
+      value: $(params.path-context)
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.prepare-plugin.results.SCRIPT_ARTIFACT)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: push-dockerfile-oci-ta
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-push-dockerfile-oci-ta:0.3.1@sha256:4c567d11296850230fe32e76d129834d3bf337a0cae9989b64279b7cfaa4e735
+      - name: kind
+        value: task
+      resolver: bundles
+  - name: rpms-signature-scan
+    params:
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    runAfter:
+    - build-image-index
+    taskRef:
+      params:
+      - name: name
+        value: rpms-signature-scan
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-rpms-signature-scan:0.2.2@sha256:4b1856e41d087e53af26562fb16a490579777d9ff05af33011ce212d477c7cd5
+      - name: kind
+        value: task
+      resolver: bundles
+    when:
+    - input: $(params.skip-checks)
+      operator: in
+      values:
+      - 'false'
+  - name: evaluate-skill
+    runAfter:
+    - prepare-plugin
+    - build-image-index
+    - select-evaluation-tiers
+    timeout: 22h
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: aeh-skill-eval
+      - name: bundle
+        value: $(params.evaluation-task-bundle)
+      - name: kind
+        value: task
+    params:
+    - name: changed-skills
+      value:
+      - $(tasks.prepare-plugin.results.SCRIPT_OUTPUT_ARRAY[*])
+    - name: command-timeout
+      value: $(params.command-timeout)
+    - name: timeout-retries
+      value: $(params.timeout-retries)
+    - name: submission-revision
+      value: $(tasks.clone-repository.results.commit)
+    - name: source-artifact
+      value: $(tasks.prepare-plugin.results.SCRIPT_ARTIFACT)
+    - name: tiers
+      value: $(tasks.select-evaluation-tiers.results.tiers)
+    - name: n-concurrent
+      value: $(params.n-concurrent)
+    - name: persist
+      value: $(params.persist)
+    - name: persistence-required
+      value: $(params.persistence-required)
+    - name: evaluation-image
+      value: $(params.evaluation-image)
+    - name: llm-secret
+      value: $(params.llm-secret)
+    - name: llm-api-base
+      value: $(params.llm-api-base)
+    - name: llm-model
+      value: $(params.llm-model)
+    - name: agent-api-base
+      value: $(params.agent-api-base)
+    - name: insecure-ssl
+      value: $(params.insecure-ssl)
+    - name: skill-review
+      value: $(params.skill-review)
+    - name: submission-review
+      value: $(params.submission-review)
+    - name: continue-on-tier1-failure
+      value: $(params.continue-on-tier1-failure)
+    - name: aeh-model-override
+      value: $(params.aeh-model-override)
+    - name: aeh-judge-model-override
+      value: $(params.aeh-judge-model-override)
+    - name: aeh-kubeconfig-secret
+      value: $(params.aeh-kubeconfig-secret)
+    - name: workload-namespace
+      value: $(params.workload-namespace)
+    - name: workload-credentials-secret
+      value: $(params.workload-credentials-secret)
+    - name: workload-service-account
+      value: $(params.workload-service-account)
+    - name: database-secret
+      value: $(params.database-secret)
+    - name: s3-secret
+      value: $(params.s3-secret)
+    - name: s3-bucket
+      value: $(params.s3-bucket)
+    - name: compass-secret
+      value: $(params.compass-secret)
+    - name: compass-token-key
+      value: $(params.compass-token-key)
+    - name: ca-bundle-configmap
+      value: $(params.ca-bundle-configmap)
+    - name: otel-exporter-endpoint
+      value: $(params.otel-exporter-endpoint)
+    - name: aeh-image
+      value: $(params.trial-image)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: component-manifest
+      value: .konflux/package/manifest.json
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  - name: verify-plugin-evidence
+    runAfter:
+    - evaluate-skill
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: verify-plugin-evidence
+      - name: bundle
+        value: $(params.verify-task-bundle)
+      - name: kind
+        value: task
+    params:
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.prepare-plugin.results.SCRIPT_ARTIFACT)
+    - name: evidence-image
+      value: $(params.evidence-image)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: evaluation-summary
+      value: $(tasks.evaluate-skill.results.PLUGIN_EVALUATION)
+    - name: report-artifact
+      value:
+        uri: $(tasks.evaluate-skill.results.skill-reports-ARTIFACT_OUTPUTS.uri)
+        digest: $(tasks.evaluate-skill.results.skill-reports-ARTIFACT_OUTPUTS.digest)
+  - name: collect-plugin-context
+    runAfter:
+    - init
+    - clone-repository
+    - select-evaluation-tiers
+    - prepare-plugin
+    - prefetch-dependencies
+    - build-container
+    - build-image-index
+    - build-source-image
+    - deprecated-base-image-check
+    - roxctl-scan
+    - ecosystem-cert-preflight-checks
+    - sast-snyk-check
+    - clamav-scan
+    - sast-shell-check
+    - sast-unicode-check
+    - apply-tags
+    - push-dockerfile
+    - rpms-signature-scan
+    - evaluate-skill
+    - verify-plugin-evidence
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: collect-plugin-context
+      - name: bundle
+        value: $(params.compass-task-bundle)
+      - name: kind
+        value: task
+    params:
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.prepare-plugin.results.SCRIPT_ARTIFACT)
+    - name: evidence-image
+      value: $(params.evidence-image)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
+    - name: compass-url
+      value: $(params.compass-url)
+    - name: compass-secret
+      value: $(params.compass-secret)
+    - name: soundcheck-checks
+      value: $(params.soundcheck-checks)
+    - name: ca-bundle-configmap
+      value: $(params.ca-bundle-configmap)
+  workspaces:
+  - name: git-auth
+    optional: true
+  - name: netrc
+    optional: true
+  - name: shared-workspace
+    description: Discovery clone under repo/ and isolated CLI batch evidence under runs/.
