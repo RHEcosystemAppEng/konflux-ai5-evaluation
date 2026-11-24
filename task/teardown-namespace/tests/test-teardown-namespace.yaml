@@ -47,39 +47,45 @@ spec:
         - name: kubeconfig-ws
           workspace: tests-workspace
 
-    # Test 1: Safety check - should fail to delete "default" namespace
+    # Test 1: Safety check - teardown-namespace must refuse to delete a non-mcp-eval namespace
     - name: test-safety-check
       runAfter:
         - setup-kubeconfig
+      onError: continue
+      taskRef:
+        name: teardown-namespace
+      params:
+        - name: namespace-name
+          value: "default"
+      workspaces:
+        - name: target-kubeconfig
+          workspace: tests-workspace
+
+    # Verify that teardown-namespace actually refused (task status must be Failed)
+    - name: verify-safety-check
+      runAfter:
+        - test-safety-check
       taskSpec:
-        workspaces:
-          - name: kubeconfig-ws
         steps:
-          - name: try-delete-default
-            image: bitnami/kubectl:latest
+          - name: check-status
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
             env:
-              - name: KUBECONFIG
-                value: $(workspaces.kubeconfig-ws.path)/kubeconfig
+              - name: TASK_STATUS
+                value: $(tasks.test-safety-check.status)
             script: |
               #!/bin/bash
-              set +e
-              # This should fail because "default" doesn't match mcp-eval-* pattern
-              NAMESPACE="default"
-              if [[ "$NAMESPACE" != mcp-eval-* ]]; then
-                echo "Safety check passed: refusing to delete namespace '$NAMESPACE'"
-                exit 0
+              set -e
+              if [ "$TASK_STATUS" = "Failed" ]; then
+                echo "Safety check passed: teardown-namespace correctly refused to delete 'default'"
               else
-                echo "FAIL: Should have refused to delete non-mcp-eval namespace"
+                echo "FAIL: Expected teardown-namespace to fail on non-mcp-eval namespace, got status: $TASK_STATUS"
                 exit 1
               fi
-      workspaces:
-        - name: kubeconfig-ws
-          workspace: tests-workspace
 
     # Test 2: Create a test namespace to delete
     - name: create-test-namespace
       runAfter:
-        - test-safety-check
+        - verify-safety-check
       taskSpec:
         results:
           - name: namespace-name
