@@ -95,8 +95,6 @@ spec:
         Kubeconfig for the target cluster. Must contain a file named
         "kubeconfig".
   results:
-    - name: conformance-eval-passed
-      description: Whether conformance evaluation passed (no check FAILED in block mode).
     - name: report-path
       description: Path to the conformance evaluation summary JSON, relative to the reports workspace root.
   steps:
@@ -303,13 +301,8 @@ spec:
         REPORTS_DIR="$(workspaces.reports.path)/reports"
         mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
-        # Run gate module and extract passed flag from summary
-        bash "/opt/${TASK_MODULE}/scripts/gate_wrapper.sh" \
-          "${TASK_MODULE}.scripts.runners.conformance_eval_gate" \
-          "$RESULTS_DIR" \
-          "$REPORTS_DIR" \
-          "$REPORTS_DIR/conformance-eval-summary.json" \
-          "$(results.conformance-eval-passed.path)"
+        python -m "${TASK_MODULE}.scripts.runners.conformance_eval_gate" \
+          --results-dir "$RESULTS_DIR" \
+          --reports-dir "$REPORTS_DIR"
 
-        # Write static report path to result
         printf '%s' "reports/conformance-eval-summary.json" > "$(results.report-path.path)"

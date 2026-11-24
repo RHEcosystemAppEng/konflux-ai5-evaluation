@@ -17,14 +17,14 @@ no deployment required.
 
 | name | description |
 |---|---|
-| static-eval-passed | `true` if all static checks passed, `false` otherwise. |
-| report-path | Workspace-relative path to the generated reports directory. |
+| report-path | Workspace-relative path to the static evaluation summary JSON (`reports/static-eval-summary.json`). |
 
 ## Workspaces
 
 | name | description |
 |---|---|
 | source | Contains the MCP server source to scan. |
+| reports | Persistent workspace for report and result output. |
 
 ## Trusted Artifacts variant
 
@@ -55,6 +55,8 @@ a Trusted Artifact.
   workspaces:
   - name: source
     workspace: shared-workspace
+  - name: reports
+    workspace: shared-workspace
 ```
 
 ### Trusted Artifacts (oci-ta variant)
@@ -75,4 +77,7 @@ a Trusted Artifact.
     value: $(tasks.git-clone.results.SOURCE_ARTIFACT)
   - name: source-subdir
     value: "."
+  workspaces:
+  - name: reports
+    workspace: shared-workspace
 ```

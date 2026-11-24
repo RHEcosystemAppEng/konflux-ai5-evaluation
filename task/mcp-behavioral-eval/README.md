@@ -34,7 +34,7 @@ configurable task suites.
 
 | name | description |
 |---|---|
-| source | Results output directory. |
+| reports | Persistent workspace for report and result output. |
 | target-kubeconfig | Kubeconfig for the target cluster where the MCP server is deployed. |
 
 ## Secrets
@@ -71,7 +71,7 @@ ephemeral evaluation namespace.
   - name: submission-name
     value: $(tasks.parse-snapshot.results.component-name)
   workspaces:
-  - name: source
+  - name: reports
     workspace: shared-workspace
   - name: target-kubeconfig
     workspace: target-kubeconfig

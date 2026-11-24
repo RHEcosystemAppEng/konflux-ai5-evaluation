@@ -26,14 +26,13 @@ probes as a Kubernetes Job on the target cluster.
 
 | name | description |
 |---|---|
-| conformance-eval-passed | `true` if all conformance probes passed, `false` otherwise. |
-| report-path | Workspace-relative path to the generated reports directory. |
+| report-path | Workspace-relative path to the conformance evaluation summary JSON (`reports/conformance-eval-summary.json`). |
 
 ## Workspaces
 
 | name | description |
 |---|---|
-| source | Report output directory. |
+| reports | Persistent workspace for report and result output. |
 | target-kubeconfig | Kubeconfig for the target cluster where the MCP server is deployed. |
 
 ## Secrets
@@ -64,7 +63,7 @@ ephemeral evaluation namespace.
   - name: namespace-name
     value: $(tasks.create-namespace.results.namespace-name)
   workspaces:
-  - name: source
+  - name: reports
     workspace: shared-workspace
   - name: target-kubeconfig
     workspace: target-kubeconfig

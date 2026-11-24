@@ -113,6 +113,8 @@ spec:
       workspaces:
         - name: source
           workspace: tests-workspace
+        - name: reports
+          workspace: tests-workspace
 
     - name: run-with-violations
       runAfter:
@@ -128,13 +130,13 @@ spec:
       workspaces:
         - name: source
           workspace: tests-workspace
+        - name: reports
+          workspace: tests-workspace
 
     - name: verify-clean-repo
       runAfter:
         - run-clean-repo
       params:
-        - name: STATIC_EVAL_PASSED
-          value: $(tasks.run-clean-repo.results.static-eval-passed)
         - name: REPORT_PATH
           value: $(tasks.run-clean-repo.results.report-path)
       workspaces:
@@ -142,7 +144,6 @@ spec:
           workspace: tests-workspace
       taskSpec:
         params:
-          - name: STATIC_EVAL_PASSED
           - name: REPORT_PATH
         workspaces:
           - name: source
@@ -154,15 +155,7 @@ spec:
               set -e
               echo "=== Verifying clean repo results ==="
 
-              STATIC_EVAL_PASSED="$(params.STATIC_EVAL_PASSED)"
               REPORT_PATH="$(params.REPORT_PATH)"
-
-              # Verify task passed for clean repo
-              if [ "$STATIC_EVAL_PASSED" != "true" ]; then
-                echo "FAIL: expected static-eval-passed=true for clean repo, got '$STATIC_EVAL_PASSED'"
-                exit 1
-              fi
-              echo "✓ Task passed for clean repo"
 
               # Verify report exists
               SUMMARY="$(workspaces.source.path)/$REPORT_PATH"
@@ -192,8 +185,6 @@ spec:
       runAfter:
         - run-with-violations
       params:
-        - name: STATIC_EVAL_PASSED
-          value: $(tasks.run-with-violations.results.static-eval-passed)
         - name: REPORT_PATH
           value: $(tasks.run-with-violations.results.report-path)
       workspaces:
@@ -201,7 +192,6 @@ spec:
           workspace: tests-workspace
       taskSpec:
         params:
-          - name: STATIC_EVAL_PASSED
           - name: REPORT_PATH
         workspaces:
           - name: source
@@ -213,11 +203,7 @@ spec:
               set -e
               echo "=== Verifying violations repo results ==="
 
-              STATIC_EVAL_PASSED="$(params.STATIC_EVAL_PASSED)"
               REPORT_PATH="$(params.REPORT_PATH)"
-
-              # Task always completes and creates summary
-              echo "Task completed with static-eval-passed=$STATIC_EVAL_PASSED"
 
               # Verify report exists
               SUMMARY="$(workspaces.source.path)/$REPORT_PATH"
