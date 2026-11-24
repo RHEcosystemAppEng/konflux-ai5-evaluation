@@ -21,13 +21,15 @@
 #     -f containers/mcp-eval/Containerfile .
 
 # ── Stage 1: mcpchecker-runner (source for mcpchecker binary) ──
-FROM quay.io/ecosystem-appeng/mcpchecker-runner:latest AS mcpchecker-runner
+FROM quay.io/ecosystem-appeng/mcpchecker-runner:latest@sha256:2f94cdc3a7d0aa40680c8f12b50cdd93179a729d1c29c1645d31ed3dd0b62577 AS mcpchecker-runner
 
 # ── Stage 2: Runtime image (agent-eval-harness provides abevalflow + Node.js + pyyaml) ──
 FROM quay.io/ecosystem-appeng/agent-eval-harness:v1.2.8
 
 ARG HELM_VERSION=3.22.1
+ARG HELM_SHA256=896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
 ARG GITLEAKS_VERSION=8.30.0
+ARG GITLEAKS_SHA256=79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e
 ARG SEMGREP_VERSION=1.179.0
 ARG LICENSEE_VERSION=9.18.0
 ARG PYDANTIC_VERSION=2.13.5
@@ -78,12 +80,17 @@ ENV PYTHONPATH=/opt:/opt/agent-eval-harness
 # nodejs, npm, pyyaml, git, tar are already provided by agent-eval-harness.
 # licensee's native dep (rugged -> libgit2) needs a build toolchain to compile;
 # install it, build the gem, then drop the toolchain to keep the image lean.
-RUN curl -fsSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
-      | tar -xz -C /usr/local/bin --strip-components=1 linux-amd64/helm \
+RUN curl -fsSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" -o /tmp/helm.tar.gz \
+ && echo "${HELM_SHA256}  /tmp/helm.tar.gz" | sha256sum -c - \
+ && tar -xz -C /usr/local/bin --strip-components=1 -f /tmp/helm.tar.gz linux-amd64/helm \
+ && rm /tmp/helm.tar.gz \
  && dnf install -y gettext --nodocs \
- && curl -LsSf \
+ && curl -fsSL \
       "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-      | tar -xz -C /usr/local/bin gitleaks \
+      -o /tmp/gitleaks.tar.gz \
+ && echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c - \
+ && tar -xz -C /usr/local/bin -f /tmp/gitleaks.tar.gz gitleaks \
+ && rm /tmp/gitleaks.tar.gz \
  && pip install --no-cache-dir \
       "semgrep==${SEMGREP_VERSION}" \
       "pydantic==${PYDANTIC_VERSION}" \

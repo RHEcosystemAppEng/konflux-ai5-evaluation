@@ -9,12 +9,13 @@
 # Push:  podman push quay.io/rhecosystemappeng/mcpchecker-runner:latest
 
 # Stage 1: Build mcpchecker from source
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 RUN apk add --no-cache git
 
 WORKDIR /build
-RUN git clone --depth 1 https://github.com/mcpchecker/mcpchecker.git .
+RUN git clone https://github.com/mcpchecker/mcpchecker.git . \
+ && git checkout 4f7880693f6d697447e939efc8168d2ac26a637f
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /mcpchecker ./cmd/mcpchecker
 
 # Stage 2: Runtime image with Python and mcpchecker
