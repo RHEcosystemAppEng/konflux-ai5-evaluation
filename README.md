@@ -36,15 +36,20 @@ Bundles are published manually under
 
 ```sh
 hack/build-and-push-bundles.sh TASK_NAME
-make test
-hack/checkton-local.sh
-hack/missing-ta-tasks.sh
 ```
 
 Pin the returned digest in consumers and their managed producer allowlists.
 Task changes require a version bump and CHANGELOG entry; see
-[shared CI standards](SHARED-CI.md). Executable local smokes use `ABEVAL_TEST_CLI`.
-Registry access and cluster integration are separate from local validation.
+[shared CI standards](SHARED-CI.md).
+
+Run the local checks with the commands below. The shared CI workflow discovers
+Tekton test Pipelines under each Task's `tests/` directory.
+[Task validation and integration tests](SHARED-CI.md#task-validation-and-integration-tests)
+
+```sh
+hack/checkton-local.sh
+hack/missing-ta-tasks.sh
+```
 
 Legacy Matrix aggregation, catalog-SHA discovery/registration Tasks and their
 onboarding examples have been removed. Plugin coverage comes from the immutable

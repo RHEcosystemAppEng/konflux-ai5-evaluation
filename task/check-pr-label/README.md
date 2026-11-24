@@ -52,6 +52,5 @@ without a new relevant MR, use an explicit `tiers=1,2` build for the selected
 Component and immutable revision. Rechecking ITS evidence alone does not run
 missing trials.
 
-Run `python -m unittest discover -s tests -v` for the executable GitLab and
-GitHub selector fixtures. The native smoke pipeline checks explicit
+The [Tekton integration test](tests/test-check-pr-label.yaml) checks explicit
 Tier 1 against an unreachable endpoint without requiring a token.

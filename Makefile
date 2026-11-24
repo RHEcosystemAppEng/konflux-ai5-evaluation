@@ -1,9 +1,4 @@
 .PHONY: bundles
-PYTHON ?= python3
-
-.PHONY: test
-test:
-	$(PYTHON) -m unittest discover -s tests -v
 
 bundles:
 	hack/build-and-push-bundles.sh $(TASKS)

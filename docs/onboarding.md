@@ -44,12 +44,12 @@ installation are maintained in the `plugin-pipeline` repository, not this Task c
 ## Validation
 
 ```sh
-make test
 hack/checkton-local.sh
 hack/missing-ta-tasks.sh
 ```
 
-Set `ABEVAL_TEST_CLI` to the installed CLI to run executable smoke tests.
+See the [shared CI integration-test guide](../SHARED-CI.md#task-validation-and-integration-tests)
+for running Tekton test Pipelines.
 For live onboarding, verify signed evidence, required persistence acknowledgements,
 official EC rejection cases and managed delivery in the owning deployment.
 Do not infer publication readiness from an evaluator's Task status alone.
