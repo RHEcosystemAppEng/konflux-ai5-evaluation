@@ -1,0 +1,75 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: verify-plugin-evidence
+  labels:
+    app.kubernetes.io/version: 1.0.0
+  annotations:
+    tekton.dev/displayName: verify-plugin-evidence
+    tekton.dev/categories: Supply Chain Security
+    tekton.dev/tags: plugin,evidence,ec
+    tekton.dev/pipelines.minVersion: 0.54.0
+spec:
+  description: Collect immutable plugin evidence for official EC policy evaluation; contains no market decisions.
+  params:
+  - name: SOURCE_ARTIFACT
+    type: string
+  - name: evidence-image
+    type: string
+  - name: image-url
+    type: string
+  - name: image-digest
+    type: string
+  - name: evaluation-summary
+    type: string
+  - name: report-artifact
+    type: object
+    properties:
+      uri: {}
+      digest: {}
+  results:
+  - name: PLUGIN_VERIFICATION
+    type: string
+  - name: TEST_OUTPUT
+    type: string
+  volumes:
+  - name: workdir
+    emptyDir: {}
+  stepTemplate:
+    securityContext:
+      runAsUser: 1001
+      runAsNonRoot: true
+    env:
+    - name: HOME
+      value: /tekton/home
+    volumeMounts:
+    - name: workdir
+      mountPath: /var/workdir
+  steps:
+  - name: use-trusted-artifact
+    image: quay.io/konflux-ci/build-trusted-artifacts@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
+    args:
+    - use
+    - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+  - name: collect
+    image: $(params.evidence-image)
+    command:
+    - python
+    - -m
+    - src.component
+    args:
+    - verify-build
+    - --source
+    - /var/workdir/source
+    - --image
+    - $(params.image-url)@$(params.image-digest)
+    - --results-dir
+    - /tekton/results
+    - --summary-json
+    - $(params.evaluation-summary)
+    - --report-uri
+    - $(params.report-artifact.uri)
+    - --report-digest
+    - $(params.report-artifact.digest)
+    - --workdir
+    - /var/workdir/verify

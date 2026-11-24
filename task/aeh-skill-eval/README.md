@@ -1,131 +1,144 @@
-# aeh-skill-eval task
+# aeh-skill-eval
 
-Runs a single catalog item's full evaluation as one Task, so a Tekton
-`Matrix` can fan out over it natively -- one `TaskRun` per item in the
-Matrix source array.
+Version 3.1.0 evaluates an explicit array of skills through one installed
+`abeval batch` invocation. The CLI runs the existing single-skill workflow in
+sequence; configured plugin trees, MCP fixtures, tiers, policy, reporting, and
+PostgreSQL/S3/Compass persistence are unchanged. Separate pipeline runs may run
+concurrently. An empty list is a successful no-op.
 
-- **Tier A** (`clone-repo`/`security-scan`/`skillmd-scan`) always runs,
-  regardless of any opt-in flag -- a non-LLM security + `SKILL.md` quality
-  scan over the real on-disk item.
-- **Tier B** (`validate`/`quality-review`/`aeh-eval-check`/
-  `write-metrics-checkpoint`/`run-eval`/`analyze-and-scorecard`/`store`),
-  the LLM-cost evaluation chain, only runs for a leg that is both changed
-  (per `changed-skills`) and opted in (`should-evaluate`) this run.
+## Steps
 
-This Task is already fully generic -- it needs only its own image, params,
-and Secrets, with no coupling to any particular source repository (unlike
-`check-pr-label`/`discover-changed-skills`/`update-registered-shas`, which
-are GitLab-project-specific). It consumes its caller's trusted Source
-Artifact via `source-artifact`, never performs its own `git clone`.
+1. Retrieve the trusted source artifact once.
+2. Run `abeval batch`, retaining its manifest and every skill's evidence even
+   when one skill fails. Only timed-out AEH arms are retried (default one retry).
+3. Package the batch manifest and per-skill reports through `batch-package`.
+4. Attach one OCI archive to the component digest using Konflux registry auth
+   and the existing task-runner/ORAS image.
+5. Validate evidence and emit bounded aggregate results with `batch-results`,
+   then fail when static or required-publication gates fail. Tier 2 is informational.
 
-**No Trusted Artifacts (`-oci-ta`) variant**: this Task's `source` workspace
-is a Matrix-shared scratch PVC (every concurrent leg computes its own
-`legs/<slug>` subdirectory under it), not a hand-off of build artifacts
-between sequential pipeline Tasks -- see
-[.ta-ignore.yaml](../../.ta-ignore.yaml) in the repo root for the full
-rationale.
-
-Emits two independent `TEST_OUTPUT` results so a caller can gate on Tier A
-(hard, always applicable) separately from Tier B (informational, "SKIPPED"
-when not applicable this run) -- see
-[aggregate-fanout-result](../aggregate-fanout-result/README.md) for
-aggregating these across every Matrix leg.
-
-Safe for concurrent Matrix legs sharing one workspace: every step except
-the final `emit-tier-a`/`emit-tier-b` uses `onError: continue` plus a
-cascading skip-guard, so one leg's runtime failure never fails that leg's
-`TaskRun` (and so never disrupts sibling legs or downstream aggregator
-Tasks).
+Timeout retries stop the local process group and await cleanup of that
+invocation's recorded trial pods before starting another attempt. Other pipeline
+runs' pods are never swept. Unconfirmed cleanup prevents further batch trials.
+No shell skill loop, new controller, queue, or whole-batch automatic retry is used.
 
 ## Parameters
 
-| name | description | default value | required |
-|---|---|---|---|
-| submission-dir | Catalog item identifier in `submission_dir` form (e.g. `rh-sre/cve-impact`). The real on-disk pack directory is mechanically derived from this. | | true |
-| submission-revision | Commit SHA of the repo being evaluated. | | true |
-| source-artifact | The caller's own trusted Source Artifact for `submission-revision`, consumed via `use-trusted-artifact` since this Task's pod has no git credentials of its own. | | true |
-| should-evaluate | Pipeline-wide (same value for every leg): `"true"` only when the Tier B (LLM) chain is opted in for this run. | `"false"` | false |
-| changed-skills | `array`. Full changed-skills array (same value for every leg, NOT a Matrix param); this leg's own `is-changed` flag is derived by membership check against this array. | `[]` | false |
-| enable-persistence | Independent of `should-evaluate`/`is-changed`: whether this leg should attempt `analyze-and-scorecard` (Compass Facts) and `store` (Postgres/MinIO) at all. | `"false"` | false |
-| harness-eval-version | Pinned `harness-eval` version for deterministic `SKILL.md` scanning. | `"7.9.0"` | false |
-| llm-api-key | API key for the LLM used by `quality-review`/`run-eval`. | `"sk-dummy"` | false |
-| llm-api-base | Base URL of the LLM API. | `""` | false |
-| llm-model | LLM model name for `quality-review`. | `"gemini-2.5-flash"` | false |
-| aeh-mode | AEH evaluation mode: `single` or `pairwise`. | `"single"` | false |
-| aeh-image | Container image AEH uses for the evaluation workload. | `"quay.io/ecosystem-appeng/agent-eval-harness:v1.2.0"` | false |
-| aeh-model-override | Explicit model override for `run-eval` (auto-derived from the item's own eval config when empty). | `""` | false |
-| aeh-judge-model-override | Explicit judge-model override for `run-eval`. | `""` | false |
-| aeh-runner | AEH runner backend (e.g. `harbor`). | `"harbor"` | false |
-| aeh-control-config | Filename (within the submission) of the control eval config. | `"eval-control.yaml"` | false |
-| aeh-treatment-config | Filename (within the submission) of the treatment eval config. | `"eval-treatment.yaml"` | false |
-| aeh-kubeconfig-secret | Name of an optional Secret holding a kubeconfig for a remote evaluation cluster. | `"agentic-plugins-konflux-sa-kubeconfig"` | false |
-| workload-namespace | Kubernetes namespace on the (remote or in-cluster) evaluation cluster to run the workload in. | `"agentic-plugins-evaluation"` | false |
-| workload-credentials-secret | Name of a Secret the harness runner provisions for the evaluation workload (consumed indirectly by the harness image itself, not by this Task's own script -- see Secrets below). | `"workload-cluster-credentials"` | false |
-| enable-aeh-eval-check | When `"true"`, runs the advisory AEH harness-inventory scan (no gate consumes its output). | `"false"` | false |
-| otel-exporter-endpoint | Optional OTLP gRPC endpoint for tracing (Tier B chain only); inert when empty. | `""` | false |
-| mock-mcp-binary | Path to the generic mock-MCP-server entrypoint baked into this Task's image, used by the `swap-mock-mcp` step for per-skill fixture-backed MCP mocking. | `"/opt/mock-mcp/src/server.py"` | false |
+For a per-plugin Component, use the entire `SCRIPT_OUTPUT_ARRAY` inventory emitted by
+the official `run-script-oci-ta` preparation step and set `component-manifest` to
+`.konflux/package/manifest.json`. This verifies complete plugin coverage before
+attaching OCI evidence. An explicit evaluation image containing CLI 0.6.0 or
+newer is required; pin it by digest in consuming pipelines.
 
-## Results
+| Parameter | Default | Purpose |
+|---|---|---|
+| `changed-skills` | `[]` | Ordered skill identifiers from the prepared plugin inventory. An empty list is a successful no-op. |
+| `submission-revision` | `Required` | Evaluated source commit SHA. |
+| `source-artifact` | `Required` | Trusted source artifact for the evaluated revision. |
+| `evaluation-image` | `Required` | Digest-pinned CLI 0.6.0+ image with both scanners, unchanged AEH runtime, model clients, and storage clients. |
+| `component-manifest` | `Disabled` | Trusted-source-relative package manifest for complete plugin evidence. |
+| `tiers` | `1` | Evaluation tiers passed directly to the CLI: 1, 2, or 1,2. |
+| `n-concurrent` | `1` | Maximum AEH trial cases run concurrently by the CLI. |
+| `aeh-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-trial@sha256:374b28704de8562ae2d6130d84d8d33d99db7dfe9680315034b10db5308cc983` | Trial image pullable by the workload cluster; used for Tier 2. |
+| `persist` | `Disabled` | Optional evaluation persistence: postgres,s3,compass. OCI evidence attachment is controlled by image-url and image-digest. |
+| `persistence-required` | `true` | Treat selected publication failures as errors. |
+| `image-url` | `Disabled` | Built component image repository for OCI report attachment. |
+| `image-digest` | `Disabled` | Built component image digest for OCI report attachment. |
+| `llm-secret` | `llm-credentials` | Konflux Secret containing api-key for local review and suite-level judging. |
+| `llm-api-base` | `Disabled` | OpenAI-compatible review and judge endpoint, normally ending in /v1. |
+| `llm-model` | `gemini-2.5-flash` | Submission and optional skill review model. |
+| `agent-api-base` | `Disabled` | Agent provider endpoint; for Claude through LiteLLM use the gateway root. |
+| `skill-review` | `false` | Enable advisory LLM skill review for every leg. |
+| `insecure-ssl` | `false` | Opt in to the internal endpoint TLS bypass for evaluations and the database route. Kubernetes API verification is unchanged; S3 has its own Secret setting. |
+| `submission-review` | `auto` | auto honors submission metadata; also accepts on or off. |
+| `continue-on-tier1-failure` | `false` | Run selected trials despite blocking static findings. |
+| `aeh-model-override` | `Disabled` | Override submission agent model. |
+| `aeh-judge-model-override` | `Disabled` | Override submission judge model. |
+| `aeh-kubeconfig-secret` | `agentic-plugins-konflux-sa-kubeconfig` | Konflux Secret containing workload kubeconfig under key kubeconfig. |
+| `workload-namespace` | `agentic-plugins-evaluation` | Namespace on the workload cluster. |
+| `workload-credentials-secret` | `llm-credentials` | Existing workload Secret with native provider SDK environment keys. |
+| `workload-service-account` | `Disabled` | Trial service account; empty uses native AEH defaults. |
+| `database-secret` | `ab-eval-db-credentials` | Konflux Secret with database-url and optional database-tls-route-host. |
+| `s3-secret` | `minio-credentials` | Konflux Secret with endpoint-url, root-user, root-password, optional insecure-skip-tls-verify. |
+| `s3-bucket` | `ab-eval-reports` | S3 publication bucket. |
+| `compass-secret` | `compass-facts-api` | Konflux Secret containing the Compass bearer token. |
+| `compass-token-key` | `token` | Key injected as `ABEVAL_COMPASS_TOKEN`; use `COMPASS_STAGE_TOKEN` with the pilot's existing Secret. |
+| `ca-bundle-configmap` | `trusted-ca-bundle` | Optional Konflux ConfigMap with trusted CA bundle at ca-bundle.crt. |
+| `otel-exporter-endpoint` | `Disabled` | Optional OTLP/gRPC collector endpoint. |
+| `command-timeout` | `7200` | Timeout in seconds for each external AEH command. |
+| `timeout-retries` | `1` | Additional attempts for a timed-out AEH arm; 0-5, never retry verdict failures. |
+| `fail-on-non-success` | `true` | Fail after emission when static or required-publication gates fail. |
 
-| name | description |
+## Results and workspaces
+
+| Result | Meaning |
 |---|---|
-| TEST_OUTPUT_TIER_A | Standardized Konflux test output derived only from `clone-repo`/`security-scan`/`skillmd-scan` -- the hard gate. |
-| TEST_OUTPUT_TIER_B | Standardized Konflux test output derived from the Tier B (LLM) chain when it actually ran this leg; `{"result": "SKIPPED", ...}` otherwise. |
+| `TEST_OUTPUT` | Standard Konflux Tier 1 result. |
+| `IMAGES_PROCESSED` | Standard pullspec and digest coverage. |
+| `PLUGIN_EVALUATION` | Compact component identity and evidence digest; empty for legacy batches. |
+| `TEST_OUTPUT_TIER_A` | Aggregate static result; unrequested tiers are excluded. |
+| `TEST_OUTPUT_TIER_B` | Aggregate informational trial result. |
+| `TEST_OUTPUT_PUBLICATION` | Aggregate application publication plus required OCI attachment. |
+| `batch-manifest` | Workspace-relative path to validated `summary.json`. |
+| `skill-reports-ARTIFACT_OUTPUTS` | Batch OCI referrer `{uri,digest}`; empty when not requested. |
 
-## Workspaces
+The `source` workspace holds `runs/<taskrun-name>/batch.json`, `summary.json`,
+and isolated per-skill run directories. Detailed outcomes remain in files to
+avoid Tekton result limits. The evaluator reads its source from the trusted
+artifact produced by `prepare-plugin`. Allocate workspace storage and timeouts
+for the full plugin inventory and its bounded timeout retries.
 
-| name | description |
-|---|---|
-| source | Shared across ALL concurrent Matrix legs (one leg per item). Each step computes its own `legs/<slug>` subdirectory first. |
-
-## Secrets
-
-| Secret (param) | Key | Required | Purpose |
-|---|---|---|---|
-| `aeh-kubeconfig-secret` (default `agentic-plugins-konflux-sa-kubeconfig`) | `kubeconfig` | optional | Kubeconfig for a remote evaluation cluster (`run-eval`); when absent, evaluation runs against the Task's own in-cluster credentials. |
-| `compass-facts-api` | `token` | optional | API token for pushing Compass Facts (`analyze-and-scorecard`). |
-| `ab-eval-db-credentials` | `database-url`, `database-tls-route-host` | optional | Postgres connection string / TLS tunnel route host for persisting results (`store`). |
-| `minio-credentials` | `endpoint-url`, `root-user`, `root-password` | optional | MinIO/S3 credentials for publishing report artifacts (`store`). |
-| `llm-credentials` *(indirect)* | n/a | n/a | Not a `secretKeyRef` on this Task -- `run-eval` sets `AGENT_EVAL_K8S_CREDENTIALS_SECRET=llm-credentials` so the harness's own remote-workload runner knows which Secret name to use on the target evaluation cluster. |
-
-No ConfigMaps are used by this Task.
+Secrets and ConfigMap names are parameters. The workload kubeconfig is mounted
+read-only; workload credentials must already exist in that cluster with native
+SDK names. Konflux review, storage, and registry credentials retain their existing
+contracts. The optional CA bundle is mounted from `ca-bundle-configmap`.
 
 ## Usage
 
+This fragment uses the preparation, build, and tier selection results from the
+native per-plugin pipeline. [Reference pipeline](https://gitlab.cee.redhat.com/ai5-marketplace/plugin-pipeline/-/blob/per-plugin-componnent/konflux/pipelines/plugin-component-build.yaml)
+
 ```yaml
 - name: evaluate-skill
-  runAfter:
-  - discover-changed-skills
-  matrix:
-    params:
-    - name: submission-dir
-      value: $(tasks.discover-changed-skills.results.changed-skills[*])
   taskRef:
     resolver: bundles
     params:
-    - name: name
-      value: aeh-skill-eval
-    - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/aeh-skill-eval:0.1.0@sha256:0415374785a418acca32bb45471a80709086f585d040186f2b0be87b5ff5d89c"
-    - name: kind
-      value: task
+      - name: name
+        value: aeh-skill-eval
+      - name: bundle
+        value: $(params.evaluation-task-bundle)
+      - name: kind
+        value: task
   params:
-  - name: submission-revision
-    value: $(params.revision)
-  - name: source-artifact
-    value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
-  - name: should-evaluate
-    value: $(tasks.check-pr-label.results.should-evaluate)
-  - name: changed-skills
-    value: $(tasks.discover-changed-skills.results.changed-skills[*])
-  - name: enable-persistence
-    value: "true"
+    - name: changed-skills
+      value:
+        - $(tasks.prepare-plugin.results.SCRIPT_OUTPUT_ARRAY[*])
+    - name: submission-revision
+      value: $(tasks.clone-repository.results.commit)
+    - name: source-artifact
+      value: $(tasks.prepare-plugin.results.SCRIPT_ARTIFACT)
+    - name: component-manifest
+      value: .konflux/package/manifest.json
+    - name: tiers
+      value: $(tasks.select-evaluation-tiers.results.tiers)
+    - name: evaluation-image
+      value: $(params.evaluation-image)
+    - name: persist
+      value: $(params.persist)
+    - name: image-url
+      value: $(tasks.build-image-index.results.IMAGE_URL)
+    - name: image-digest
+      value: $(tasks.build-image-index.results.IMAGE_DIGEST)
   workspaces:
-  - name: source
-    workspace: shared-workspace
+    - name: source
+      workspace: shared-workspace
 ```
 
-Then aggregate every leg's results with
-[aggregate-fanout-result](../aggregate-fanout-result/README.md) -- see
-[docs/examples/skills-evaluation-usage.md](../../docs/examples/skills-evaluation-usage.md)
-for the full end-to-end wiring.
+### PostgreSQL evidence schema v2
+
+With CLI 0.5.1, the batch invocation records the built component image as
+`ABEVAL_BUILT_IMAGE_REF=<image-url>@<image-digest>` for every evaluated skill when
+those inputs are supplied. This is separate from `aeh-image`, the trial runtime.
+The source revision is retained on every skill evaluation. The new PostgreSQL
+schema requires a fresh database; existing schema v1 tables are not modified or
+migrated. CLI 0.6.0 retains schema v2 and this image binding; select its runner explicitly by digest.

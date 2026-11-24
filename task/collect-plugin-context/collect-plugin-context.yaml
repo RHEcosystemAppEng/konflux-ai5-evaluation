@@ -1,0 +1,87 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: collect-plugin-context
+  labels:
+    app.kubernetes.io/version: 1.0.0
+  annotations:
+    tekton.dev/displayName: collect-plugin-context
+    tekton.dev/categories: Supply Chain Security
+    tekton.dev/tags: plugin,evidence,ec
+    tekton.dev/pipelines.minVersion: 0.54.0
+spec:
+  description: Collect immutable plugin evidence for official EC policy evaluation; contains no market decisions.
+  params:
+  - name: SOURCE_ARTIFACT
+    type: string
+  - name: evidence-image
+    type: string
+  - name: image-url
+    type: string
+  - name: image-digest
+    type: string
+  - name: compass-url
+    type: string
+  - name: soundcheck-checks
+    type: string
+  - name: compass-secret
+    type: string
+    default: plugin-pipeline-compass-sec
+  - name: ca-bundle-configmap
+    type: string
+    default: trusted-ca
+  results:
+  - name: COMPASS_CONTEXT
+    type: string
+  - name: TEST_OUTPUT
+    type: string
+  volumes:
+  - name: workdir
+    emptyDir: {}
+  - name: trusted-ca
+    configMap:
+      name: $(params.ca-bundle-configmap)
+  stepTemplate:
+    securityContext:
+      runAsUser: 1001
+      runAsNonRoot: true
+    env:
+    - name: HOME
+      value: /tekton/home
+    - name: PLUGIN_COMPASS_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: $(params.compass-secret)
+          key: COMPASS_STAGE_TOKEN
+    - name: SSL_CERT_FILE
+      value: /var/plugin-ca/ca-bundle.crt
+    volumeMounts:
+    - name: workdir
+      mountPath: /var/workdir
+    - name: trusted-ca
+      mountPath: /var/plugin-ca
+      readOnly: true
+  steps:
+  - name: use-trusted-artifact
+    image: quay.io/konflux-ci/build-trusted-artifacts@sha256:a61ef5dfee9a8720f7bc2d1d52001057ca6a22d2ddbae0db175b11d9ab95105a
+    args:
+    - use
+    - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+  - name: collect
+    image: $(params.evidence-image)
+    command:
+    - python
+    - -m
+    - src.component
+    args:
+    - collect-compass
+    - --source
+    - /var/workdir/source
+    - --image
+    - $(params.image-url)@$(params.image-digest)
+    - --results-dir
+    - /tekton/results
+    - --compass-url
+    - $(params.compass-url)
+    - --checks-json
+    - $(params.soundcheck-checks)
