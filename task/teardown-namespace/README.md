@@ -28,7 +28,7 @@ finally:
     - name: name
       value: teardown-namespace
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/teardown-namespace:0.1.0@sha256:eb669370bb331f2ed3e11c702538bf7ffa2824f6230effc6f23c4ecde2500c18"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/teardown-namespace:0.1.0@sha256:20ac552dc0c7fe5d784bbd5d2c417cd03e12df6c3e7f06a08cab741bf1bbd4ee"
     - name: kind
       value: task
   params:

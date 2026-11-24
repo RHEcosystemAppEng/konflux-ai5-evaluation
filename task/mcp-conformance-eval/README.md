@@ -57,7 +57,7 @@ ephemeral evaluation namespace.
     - name: name
       value: mcp-conformance-eval
     - name: bundle
-      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-conformance-eval:0.1.0@sha256:272340bf7a1467a594d21bd533286866a600c9f9e51aa16bcad5715583f78e9f"
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-conformance-eval:0.1.0@sha256:b9cb83c66f105eb0db6e7d6f21440502a1abdbc3bbe03687b5c3540959c20a45"
     - name: kind
       value: task
   params:
