@@ -21,10 +21,10 @@ spec:
         pipeline code (scripts, abevalflow.mcp) baked in at PYTHONPATH=/opt.
     - name: source-subdir
       type: string
-      default: "mcp-server-repo"
+      default: "."
       description: >-
         Subdirectory within the workspace where the MCP server repository
-        is cloned (relative to the workspace root).
+        is cloned (relative to the workspace root). Use "." for the workspace root.
     - name: allowed-licenses
       type: string
       default: ""
@@ -57,9 +57,10 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        # Derive Python module name from task name
-        # mcp-static-eval (Tekton) → mcp_static_eval (Python package)
-        TASK_MODULE="${TASK_NAME//-/_}"
+        # Derive Python module name from task name, stripping any -oci-ta suffix
+        # (no-op here; makes the TA variant resolve the same package).
+        TASK_NAME_NO_TA="${TASK_NAME%-oci-ta}"
+        TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
 
         SOURCE_DIR="$(workspaces.source.path)/$SOURCE_SUBDIR"
         RESULTS_DIR="$(workspaces.source.path)/results"
@@ -98,8 +99,8 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        # Derive Python module name from task name
-        TASK_MODULE="${TASK_NAME//-/_}"
+        TASK_NAME_NO_TA="${TASK_NAME%-oci-ta}"
+        TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
 
         RESULTS_DIR="$(workspaces.source.path)/results"
         REPORTS_DIR="$(workspaces.source.path)/reports"

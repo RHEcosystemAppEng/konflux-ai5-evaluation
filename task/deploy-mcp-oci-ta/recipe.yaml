@@ -5,4 +5,4 @@ add:
 removeWorkspaces:
   - source
 replacements:
-  workspaces.source.path: /var/workdir
+  workspaces.source.path: /var/workdir/source

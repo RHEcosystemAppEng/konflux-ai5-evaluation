@@ -29,10 +29,10 @@ spec:
         Used for the Helm deployment step.
     - name: repo-subdir
       type: string
-      default: "mcp-server-repo"
+      default: "."
       description: >-
         Subdirectory within the source workspace where the MCP server
-        repository is cloned by the pipeline's fetch-mcp-repo task.
+        repository is cloned by the pipeline's fetch-mcp-repo task. Use "." for the workspace root.
     - name: service-name
       type: string
       default: "mcp-server"

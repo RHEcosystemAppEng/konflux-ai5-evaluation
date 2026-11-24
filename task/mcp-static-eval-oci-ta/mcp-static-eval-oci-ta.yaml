@@ -29,9 +29,9 @@ spec:
       default: quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1
     - name: source-subdir
       description: Subdirectory within the workspace where the MCP server
-        repository is cloned (relative to the workspace root).
+        repository is cloned (relative to the workspace root). Use "." for the workspace root.
       type: string
-      default: mcp-server-repo
+      default: "."
   results:
     - name: report-path
       description: Workspace-relative path to the static evaluation reports
@@ -64,11 +64,12 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        # Derive Python module name from task name
-        # mcp-static-eval (Tekton) → mcp_static_eval (Python package)
-        TASK_MODULE="${TASK_NAME//-/_}"
+        # Derive Python module name: strip -oci-ta suffix first so that
+        # mcp-static-eval-oci-ta → mcp_static_eval (matches /opt/mcp_static_eval/).
+        TASK_NAME_NO_TA="${TASK_NAME%-oci-ta}"
+        TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
 
-        SOURCE_DIR="/var/workdir/$SOURCE_SUBDIR"
+        SOURCE_DIR="/var/workdir/source/$SOURCE_SUBDIR"
         RESULTS_DIR="/var/workdir/results"
         mkdir -p "$RESULTS_DIR"
 
@@ -107,8 +108,8 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        # Derive Python module name from task name
-        TASK_MODULE="${TASK_NAME//-/_}"
+        TASK_NAME_NO_TA="${TASK_NAME%-oci-ta}"
+        TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
 
         RESULTS_DIR="/var/workdir/results"
         REPORTS_DIR="/var/workdir/reports"

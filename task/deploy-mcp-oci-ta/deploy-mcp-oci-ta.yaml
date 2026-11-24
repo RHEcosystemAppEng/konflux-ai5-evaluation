@@ -59,9 +59,9 @@ spec:
       type: string
     - name: repo-subdir
       description: Subdirectory within the source workspace where the MCP
-        server repository is cloned by the pipeline's fetch-mcp-repo task.
+        server repository is cloned by the pipeline's fetch-mcp-repo task. Use "." for the workspace root.
       type: string
-      default: mcp-server-repo
+      default: "."
     - name: service-name
       description: Kubernetes Service name for the deployed MCP server
       type: string
@@ -194,8 +194,8 @@ spec:
         set -euo pipefail
         echo "=== DEPLOY MCP SERVER ==="
 
-        HELM_CHART="/var/workdir/$REPO_SUBDIR/$HELM_CHART_PATH"
-        VALUES_FILE="/var/workdir/$REPO_SUBDIR/$VALUES_TEST_PATH"
+        HELM_CHART="/var/workdir/source/$REPO_SUBDIR/$HELM_CHART_PATH"
+        VALUES_FILE="/var/workdir/source/$REPO_SUBDIR/$VALUES_TEST_PATH"
         RELEASE_NAME="mcp-eval"
 
         echo "Namespace: $NAMESPACE"
