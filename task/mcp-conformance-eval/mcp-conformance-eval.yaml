@@ -77,6 +77,10 @@ spec:
         Name of the Secret on the target cluster containing the CA
         certificate for internal Compass endpoints. Key: ca.crt.
         Optional - if not present, system CA bundle is used.
+    - name: pipeline-run-id
+      type: string
+      default: ""
+      description: Pipeline run ID for provenance tracking and unique job naming; a random suffix is used if empty
     - name: job-template
       type: string
       default: "templates/mcp-conformance-eval-job.yaml"
@@ -140,10 +144,12 @@ spec:
       env:
         - name: TASK_NAME
           value: $(context.task.name)
+        - name: TASK_RUN_UID
+          value: $(context.taskRun.uid)
         - name: NAMESPACE
           value: $(params.namespace-name)
-        - name: JOB_NAME
-          value: conformance-eval-probe
+        - name: PIPELINE_RUN_ID
+          value: $(params.pipeline-run-id)
         - name: IMAGE
           value: $(params.mcp-eval-image)
         - name: JOB_TIMEOUT
@@ -167,6 +173,10 @@ spec:
         # Derive Python module name from task name and export for envsubst
         export TASK_MODULE="${TASK_NAME//-/_}"
 
+        _ID="${PIPELINE_RUN_ID:-$TASK_RUN_UID}"
+        RUN_ID=$(printf '%s' "$_ID" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-40)
+        export JOB_NAME="${TASK_NAME}-${RUN_ID}"
+
         # shellcheck disable=SC2016  # envsubst variable spec is intentionally single-quoted
         envsubst \
           '${JOB_NAME} ${NAMESPACE} ${JOB_TIMEOUT} ${IMAGE} ${SERVER_URL} ${TIMEOUT} ${OPENAPI_URL} ${COMPASS_SECRET} ${CA_SECRET} ${TASK_MODULE}' \
@@ -182,10 +192,14 @@ spec:
       env:
         - name: KUBECONFIG
           value: $(workspaces.target-kubeconfig.path)/kubeconfig
+        - name: TASK_NAME
+          value: $(context.task.name)
         - name: NAMESPACE
           value: $(params.namespace-name)
-        - name: JOB_NAME
-          value: conformance-eval-probe
+        - name: PIPELINE_RUN_ID
+          value: $(params.pipeline-run-id)
+        - name: TASK_RUN_UID
+          value: $(context.taskRun.uid)
         - name: JOB_TIMEOUT
           value: $(params.job-timeout)
         - name: COMPASS_SECRET
@@ -195,6 +209,10 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+
+        _ID="${PIPELINE_RUN_ID:-$TASK_RUN_UID}"
+        RUN_ID=$(printf '%s' "$_ID" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-40)
+        JOB_NAME="${TASK_NAME}-${RUN_ID}"
 
         # Copy Compass secret into ephemeral namespace if not already present
         if [ -n "$COMPASS_SECRET" ]; then
@@ -263,8 +281,6 @@ spec:
             echo "WARNING: No JSON after marker for $report"
           fi
         done < <(grep -E '^===REPORT_JSON:.*===$' "$RAW_LOGS")
-
-        oc delete job "$JOB_NAME" -n "$NAMESPACE" --ignore-not-found=true >/dev/null 2>&1 || true
 
         echo "Saved $REPORT_COUNT report(s) to $RESULTS_DIR"
         ls -la "$RESULTS_DIR"
