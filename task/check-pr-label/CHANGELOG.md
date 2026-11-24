@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Support GitHub-only builds through `source-provider: github`, with no GitLab API token required.
+- Keep GitLab as the default, with the optional GitHub fallback for mirrored commits.
+
 ## 0.2.2
 
 - Add an optional GitHub repository lookup for mirrored commits without a matching GitLab MR.

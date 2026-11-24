@@ -6,25 +6,29 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: 0.2.2
+    app.kubernetes.io/version: 0.2.3
 spec:
-  description: Select explicit evaluation tiers, or check the merged GitLab MR or upstream GitHub PR for the
-    exact commit and target branch. API and TLS failures fail the task.
+  description: Select explicit evaluation tiers or check the matching merged GitLab MR or GitHub PR for the
+    exact commit and target branch. GitLab builds can also check an upstream GitHub repository.
   params:
   - name: tiers
     type: string
     default: auto
     description: auto uses the merged change's label; 1 and 1,2 explicitly select tiers without an API lookup.
+  - name: source-provider
+    type: string
+    default: gitlab
+    description: Git provider of the build source in auto mode. Use gitlab or github.
   - name: target-branch
     type: string
     description: Exact destination branch of the merged MR or PR; required with auto.
   - name: ca-bundle-configmap
     type: string
     default: trusted-ca
-    description: Optional additional GitLab CA trust bundle.
+    description: Optional additional CA trust bundle for API lookups.
   - name: current-sha
     type: string
-    description: Commit SHA to look up merge requests for.
+    description: Exact build commit SHA to match to a merged MR or PR.
   - name: label-name
     type: string
     default: evaluate
@@ -49,7 +53,7 @@ spec:
   - name: github-repository
     type: string
     default: ""
-    description: Optional GitHub.com owner/repo to check for the same commit and branch when GitLab has no matching merged MR.
+    description: GitHub.com owner/repo for GitHub builds, or an optional upstream GitHub repository for GitLab builds.
   - name: github-token-secret-name
     type: string
     default: github-pr-read-token
@@ -69,6 +73,8 @@ spec:
     env:
     - name: TIERS
       value: $(params.tiers)
+    - name: SOURCE_PROVIDER
+      value: $(params.source-provider)
     - name: TARGET_BRANCH
       value: $(params.target-branch)
     - name: CURRENT_SHA
@@ -163,27 +169,15 @@ spec:
           return matches[0] if matches else None
 
 
-      mode = os.environ["TIERS"]
-      if mode not in {"auto", "1", "1,2"}:
-          raise SystemExit("tiers must be auto, 1, or 1,2")
-
-      selected = mode
-      if mode == "auto":
-          sha = os.environ["CURRENT_SHA"]
-          branch = os.environ["TARGET_BRANCH"]
+      def matching_gitlab_mr(sha, branch, context):
           token = os.environ.get("GIT_TOKEN", "")
+          if not token:
+              raise SystemExit("GitLab auto lookup requires a GitLab API token")
           server = os.environ["GITLAB_SERVER_URL"].rstrip("/")
           parsed = urllib.parse.urlsplit(server)
           if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.query or parsed.fragment:
               raise SystemExit("GitLab must use HTTPS without embedded credentials or query parameters")
-          if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) or not branch or not token:
-              raise SystemExit("auto requires a full commit SHA, target branch and GitLab API token")
           project = urllib.parse.quote(urllib.parse.unquote(os.environ["GITLAB_PROJECT_PATH"]), safe="")
-          context = ssl.create_default_context()
-          ca = Path("/var/trusted-ca/ca-bundle.crt")
-          if ca.is_file() and ca.stat().st_size:
-              context.load_verify_locations(cafile=str(ca))
-          matches = []
           # The push webhook can precede GitLab updating the MR's merged state.
           for attempt in range(3):
               rows = []
@@ -214,17 +208,42 @@ spec:
                          and (sha in (row.get("merge_commit_sha"), row.get("squash_commit_sha"))
                               or (not row.get("merge_commit_sha") and not row.get("squash_commit_sha")
                                   and (row.get("sha") or (row.get("diff_refs") or {}).get("head_sha")) == sha))]
+              if len(matches) > 1:
+                  raise SystemExit("Ambiguous merged GitLab MR for this exact commit and target branch")
               if matches:
-                  break
+                  return matches[0]
               if attempt < 2:
                   time.sleep(2)
-          if len(matches) > 1:
-              raise SystemExit("Ambiguous merged MR for this exact commit and target branch")
-          label = os.environ["LABEL_NAME"]
+          return None
+
+
+      mode = os.environ["TIERS"]
+      if mode not in {"auto", "1", "1,2"}:
+          raise SystemExit("tiers must be auto, 1, or 1,2")
+
+      selected = mode
+      if mode == "auto":
+          sha = os.environ["CURRENT_SHA"]
+          branch = os.environ["TARGET_BRANCH"]
+          if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) or not branch:
+              raise SystemExit("auto requires a full commit SHA and target branch")
+          provider = os.environ["SOURCE_PROVIDER"]
+          if provider not in {"gitlab", "github"}:
+              raise SystemExit("source-provider must be gitlab or github")
           repository = os.environ["GITHUB_UPSTREAM_REPOSITORY"]
-          if matches or not repository:
-              labeled = bool(matches and label in (matches[0].get("labels") or []))
-              source = "Merged MR: " + str(matches[0].get("iid") if matches else "none")
+          if provider == "github" and not repository:
+              raise SystemExit("GitHub auto lookup requires github-repository")
+
+          context = ssl.create_default_context()
+          ca = Path("/var/trusted-ca/ca-bundle.crt")
+          if ca.is_file() and ca.stat().st_size:
+              context.load_verify_locations(cafile=str(ca))
+
+          label = os.environ["LABEL_NAME"]
+          merge_request = matching_gitlab_mr(sha, branch, context) if provider == "gitlab" else None
+          if merge_request is not None or (provider == "gitlab" and not repository):
+              labeled = bool(merge_request and label in (merge_request.get("labels") or []))
+              source = "Merged GitLab MR: " + str(merge_request.get("iid") if merge_request else "none")
           else:
               pull = matching_github_pr(repository, sha, branch, context)
               labels = pull.get("labels") if pull else []

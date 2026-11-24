@@ -14,7 +14,7 @@ Task layout, versioning, linting, and integration tests follow `task-repo-shared
 | [aeh-skill-eval](task/aeh-skill-eval/README.md) | 3.1.0 | Evaluate the package; emit schema-2 signed scores and attach complete reports |
 | [verify-plugin-evidence](task/verify-plugin-evidence/README.md) | 1.0.0 | Bind actual image, package inventory, report hashes and score evidence |
 | [collect-plugin-context](task/collect-plugin-context/README.md) | 1.0.0 | Collect ownership, lifecycle and requested Compass observations |
-| [check-pr-label](task/check-pr-label/README.md) | 0.2.2 | Select optional Tier 2 from the `evaluate` label on a GitLab MR or an upstream GitHub PR |
+| [check-pr-label](task/check-pr-label/README.md) | 0.2.3 | Select optional Tier 2 from the `evaluate` label on a GitHub PR or GitLab MR, including mirrored builds |
 
 Tier 1 is always selected. The label is not required for redhat-only. Missing
 behavior stays unavailable. Task success records evidence collection/execution;
