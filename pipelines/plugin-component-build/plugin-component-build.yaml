@@ -3,7 +3,7 @@ kind: Pipeline
 metadata:
   name: plugin-component-build
   labels:
-    app.kubernetes.io/version: 1.0.0
+    app.kubernetes.io/version: 1.1.0
 spec:
   description: Build, evaluate and collect evidence for exactly one plugin. Official EC policies decide market eligibility
     from Chains-signed task results.
@@ -220,16 +220,20 @@ spec:
     type: string
   - name: label-task-bundle
     type: string
-    description: Approved digest-pinned check-pr-label task bundle.
+    description: Approved digest-pinned check-pr-label Task bundle (0.2.2 or later).
   - name: target-branch
     type: string
-    description: Destination branch used to identify the exact merged MR.
+    description: Destination branch used to identify the exact merged MR or PR.
   - name: gitlab-server-url
     type: string
     default: https://gitlab.cee.redhat.com
   - name: gitlab-project-path
     type: string
     default: ai5-marketplace%2Fagentic-plugins
+  - name: github-repository
+    type: string
+    default: ''
+    description: Optional upstream GitHub.com owner/repo for label lookup on mirrored GitLab builds.
   - name: gitlab-token-secret
     type: string
     default: agentic-plugins-gitlab-sa
@@ -347,6 +351,8 @@ spec:
       value: $(params.gitlab-server-url)
     - name: gitlab-project-path
       value: $(params.gitlab-project-path)
+    - name: github-repository
+      value: $(params.github-repository)
     - name: git-token-secret-name
       value: $(params.gitlab-token-secret)
     - name: ca-bundle-configmap

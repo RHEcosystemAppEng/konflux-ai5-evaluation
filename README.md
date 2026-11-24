@@ -20,6 +20,12 @@ Pull requests targeting `main` build a temporary bundle tagged `on-pr-<sha>`.
 Pushes to `main` that change the Pipeline or its publish configuration publish
 a bundle tagged with the commit SHA. Pin that bundle's digest in consumers.
 
+For a GitHub repository mirrored to GitLab, pass `tiers: auto` and set
+`github-repository` to the upstream GitHub.com `owner/repo`. With a
+`check-pr-label` bundle at version 0.2.2 or later, the Pipeline checks GitHub
+when GitLab finds no matching merged MR. The mirror must preserve the merge
+commit SHA and target branch.
+
 ## Supported Task catalog
 
 | Task | Version | Responsibility |

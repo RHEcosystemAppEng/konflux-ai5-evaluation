@@ -42,6 +42,11 @@ for task_name, (name, bundle_param) in bundles.items():
     assert supplied <= declared, f"{task_name} unknown inputs: {supplied - declared}"
     assert required <= supplied, f"{task_name} missing inputs: {required - supplied}"
 
+github_repository = next(param for param in spec["params"] if param["name"] == "github-repository")
+assert github_repository["default"] == ""
+label_lookup = {item["name"]: item["value"] for item in tasks["select-evaluation-tiers"]["params"]}
+assert label_lookup["github-repository"] == "$(params.github-repository)"
+
 evaluation = {item["name"]: item["value"] for item in tasks["evaluate-skill"]["params"]}
 assert evaluation["compass-token-key"] == "$(params.compass-token-key)"
 assert evaluation["tiers"] == "$(tasks.select-evaluation-tiers.results.tiers)"
