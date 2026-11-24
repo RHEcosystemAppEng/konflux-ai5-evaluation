@@ -80,7 +80,7 @@ spec:
     - name: pipeline-run-id
       type: string
       default: ""
-      description: Pipeline run ID for provenance tracking and unique job naming; a random suffix is used if empty
+      description: Pipeline run ID for provenance tracking and unique job naming; task run UID is used if empty
     - name: job-template
       type: string
       default: "templates/mcp-conformance-eval-job.yaml"

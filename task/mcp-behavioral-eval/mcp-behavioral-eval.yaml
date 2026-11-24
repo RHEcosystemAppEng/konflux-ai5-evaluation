@@ -86,7 +86,7 @@ spec:
     - name: pipeline-run-id
       type: string
       default: ""
-      description: Pipeline run ID for provenance tracking and unique job naming; a random suffix is used if empty
+      description: Pipeline run ID for provenance tracking and unique job naming
     - name: submission-name
       type: string
       description: Name of the MCP component being evaluated (from the Konflux snapshot)
@@ -336,7 +336,7 @@ spec:
           --output-json "$OUTPUT_FILE" \
           --submission-name "$SUBMISSION_NAME" \
           --report-dir "$RESULTS_DIR" \
-          --pipeline-run-id "$PIPELINE_RUN_ID" \
+          --pipeline-run-id "${PIPELINE_RUN_ID:-$TASK_RUN_UID}" \
           > /tmp/aggregate_output.json 2>/tmp/aggregate_stderr.log || {
             echo '{"overall_score": 0, "passed_tasks": 0, "total_tasks": 0, "recommendation": "error"}' \
               > /tmp/aggregate_output.json

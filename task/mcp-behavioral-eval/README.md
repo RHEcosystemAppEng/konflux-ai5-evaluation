@@ -21,7 +21,7 @@ configurable task suites.
 | job-template | Relative path to the Kubernetes Job template (from task directory) | `templates/mcp-behavioral-eval-job.yaml` | false |
 | suites-dir | Relative path to the mcpchecker task suites directory (from task directory) | `suites/default` | false |
 | secrets-namespace | Namespace on the target cluster where LLM secrets are stored | `default` | false |
-| pipeline-run-id | Pipeline run ID for provenance | | true |
+| pipeline-run-id | Pipeline run ID for provenance tracking and unique job naming | `""` | false |
 | submission-name | Component name being evaluated | | true |
 
 ## Results
@@ -46,7 +46,7 @@ ephemeral evaluation namespace.
 | Secret (param) | Keys | Source | Purpose |
 |---|---|---|---|
 | `llm-agent-secret` (default `mcp-eval-llm-agent`) | `openai-api-key`, `openai-base-url`, `anthropic-api-key`, `anthropic-base-url`, `model-name` | Target cluster (`secrets-namespace`) | LLM agent credentials for mcpchecker. |
-| `llm-judge-secret` (default `mcp-eval-llm-judge`) | `model` | Target cluster (`secrets-namespace`) | Judge LLM model name. |
+| `llm-judge-secret` (default `mcp-eval-llm-judge`) | `model-name` | Target cluster (`secrets-namespace`) | Judge LLM model name. |
 | `llm-ca-secret` (default `mcp-eval-ca`) | `ca.crt` | Target cluster (`secrets-namespace`) | CA certificate bundle for internal LLM endpoints. |
 
 ## Usage

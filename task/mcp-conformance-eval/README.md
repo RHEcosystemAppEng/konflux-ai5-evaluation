@@ -21,6 +21,7 @@ probes as a Kubernetes Job on the target cluster.
 | compass-secret | Secret name for Compass SoundCheck credentials | `mcp-eval-compass` | false |
 | job-template | Relative path to the Kubernetes Job template (from task directory) | `templates/mcp-conformance-eval-job.yaml` | false |
 | ca-secret | Secret name for CA certificate for internal Compass endpoints | `mcp-eval-ca` | false |
+| pipeline-run-id | Pipeline run ID for unique job naming; task run UID used if empty | `""` | false |
 
 ## Results
 
