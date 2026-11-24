@@ -6,6 +6,17 @@ Intended to be cleaned up by
 [teardown-namespace](../teardown-namespace/README.md) in the pipeline's
 `finally` block.
 
+## Prerequisites
+
+The ClusterRole `mcp-eval-ephemeral-access` **must already exist** on the
+target cluster before this task runs. The RoleBinding created by this task
+references it; `oc apply` will not create the ClusterRole automatically and
+the step will fail if it is missing.
+
+The ClusterRole must be configured by the target cluster maintainers with
+whatever permissions the pipeline ServiceAccount needs inside the ephemeral
+namespace.
+
 ## Parameters
 
 | name | description | default value | required |

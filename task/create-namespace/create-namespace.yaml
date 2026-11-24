@@ -8,9 +8,12 @@ spec:
   description: >-
     Creates an ephemeral namespace for MCP server evaluation on a remote
     target cluster and grants the pipeline ServiceAccount access through a
-    RoleBinding. Namespace security restrictions are currently disabled.
-    The namespace is named mcp-eval-<run-id> and is intended to be
-    cleaned up by the teardown-namespace task in the finally block.
+    RoleBinding that references the ClusterRole mcp-eval-ephemeral-access.
+    That ClusterRole must already exist on the target cluster; it is the
+    responsibility of the target cluster maintainers to configure it.
+    Namespace security restrictions are currently disabled. The namespace
+    is named mcp-eval-<run-id> and is intended to be cleaned up by the
+    teardown-namespace task in the finally block.
   params:
     - name: pipeline-run-id
       type: string
