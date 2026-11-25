@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.0.0
+
+- Move Compass fact publication to the post-build integration PipelineRun.
+- Remove the evaluator's Compass credential parameters and reject Compass as
+  an evaluation persistence destination.
+
 ## 3.1.0
 
 - Add `compass-token-key`, defaulting to `token` for existing consumers.

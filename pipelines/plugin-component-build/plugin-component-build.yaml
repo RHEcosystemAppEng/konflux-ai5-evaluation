@@ -3,7 +3,7 @@ kind: Pipeline
 metadata:
   name: plugin-component-build
   labels:
-    app.kubernetes.io/version: 1.1.0
+    app.kubernetes.io/version: 2.0.0
 spec:
   description: Build, evaluate and collect evidence for exactly one plugin. Official EC policies decide market eligibility
     from Chains-signed task results.
@@ -105,8 +105,8 @@ spec:
     description: Maximum AEH trial cases to run concurrently per skill evaluation.
   - name: persist
     type: string
-    default: postgres,compass
-    description: 'Comma-separated application destinations: postgres,s3,compass; empty disables publication.'
+    default: postgres
+    description: Comma-separated evaluation persistence destinations (postgres, s3).
   - name: persistence-required
     type: string
     default: 'true'
@@ -189,11 +189,7 @@ spec:
   - name: compass-secret
     type: string
     default: compass-facts-api
-    description: Konflux Secret containing token for Compass publication.
-  - name: compass-token-key
-    type: string
-    default: token
-    description: Key in compass-secret injected into the evaluator as ABEVAL_COMPASS_TOKEN.
+    description: Konflux Secret used to read Compass catalog and SoundCheck context.
   - name: ca-bundle-configmap
     type: string
     default: trusted-ca-bundle
@@ -830,10 +826,6 @@ spec:
       value: $(params.s3-secret)
     - name: s3-bucket
       value: $(params.s3-bucket)
-    - name: compass-secret
-      value: $(params.compass-secret)
-    - name: compass-token-key
-      value: $(params.compass-token-key)
     - name: ca-bundle-configmap
       value: $(params.ca-bundle-configmap)
     - name: otel-exporter-endpoint

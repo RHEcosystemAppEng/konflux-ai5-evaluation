@@ -1,0 +1,190 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: compass-publication
+spec:
+  pipelineSpec:
+    params:
+    - name: SNAPSHOT
+      type: string
+    - name: POLICY_CONFIGURATION
+      type: string
+    - name: PUBLISHER_IMAGE
+      type: string
+    - name: COMPASS_URL
+      type: string
+    - name: COMPASS_SECRET
+      type: string
+    - name: COMPASS_TOKEN_KEY
+      type: string
+    - name: REGISTRY_SECRET
+      type: string
+    - name: COMPONENT
+      type: string
+    workspaces:
+    - name: data
+    tasks:
+    - name: select-component
+      taskSpec:
+        results:
+        - name: selected
+        steps:
+        - name: select
+          image: $(params.PUBLISHER_IMAGE)
+          command: [python, -c]
+          args:
+          - |
+            import json
+            import os
+            from pathlib import Path
+
+            snapshot = json.loads(os.environ['SNAPSHOT'])
+            component = os.environ['COMPONENT']
+            selected = [entry for entry in snapshot['components'] if entry['name'] == component]
+            output = 'skip'
+            if os.environ['TRIGGER_COMPONENT'] == component and os.environ['PUBLISH'] == 'true':
+                if len(selected) != 1:
+                    raise ValueError('Expected exactly one selected Component in the Snapshot')
+                output = json.dumps({**snapshot, 'components': selected}, separators=(',', ':'))
+            Path('$(results.selected.path)').write_text(output)
+          env:
+          - name: SNAPSHOT
+            value: $(params.SNAPSHOT)
+          - name: COMPONENT
+            value: $(params.COMPONENT)
+          - name: TRIGGER_COMPONENT
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['appstudio.openshift.io/component']
+          - name: PUBLISH
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['custom.appstudio.openshift.io/compass-publish']
+    - name: collect-signing-params
+      when:
+      - input: $(tasks.select-component.results.selected)
+        operator: notin
+        values: [skip]
+      taskRef:
+        resolver: bundles
+        params:
+        - name: name
+          value: collect-keyless-params
+        - name: bundle
+          value: quay.io/conforma/tekton-task:konflux@sha256:e2ac3444a229ce1688c96692ba2af166656be9313ac5cba750cac1c7daf3371d
+        - name: kind
+          value: task
+    - name: verify-enterprise-contract
+      when:
+      - input: $(tasks.select-component.results.selected)
+        operator: notin
+        values: [skip]
+      taskRef:
+        resolver: bundles
+        params:
+        - name: name
+          value: verify-enterprise-contract
+        - name: bundle
+          value: quay.io/conforma/tekton-task:konflux@sha256:e2ac3444a229ce1688c96692ba2af166656be9313ac5cba750cac1c7daf3371d
+        - name: kind
+          value: task
+      params:
+      - name: IMAGES
+        value: $(tasks.select-component.results.selected)
+      - name: POLICY_CONFIGURATION
+        value: $(params.POLICY_CONFIGURATION)
+      - name: STRICT
+        value: 'true'
+      - name: IGNORE_REKOR
+        value: 'true'
+      - name: CA_TRUST_CONFIGMAP_NAME
+        value: trusted-ca
+      - name: CERTIFICATE_IDENTITY
+        value: $(tasks.collect-signing-params.results.tektonChainsIdentity)
+      - name: CERTIFICATE_OIDC_ISSUER
+        value: $(tasks.collect-signing-params.results.defaultOIDCIssuer)
+      - name: REKOR_HOST
+        value: $(tasks.collect-signing-params.results.rekorUrl)
+      - name: TUF_MIRROR
+        value: $(tasks.collect-signing-params.results.tufUrl)
+      - name: HOMEDIR
+        value: /workspace/data
+      workspaces:
+      - name: data
+        workspace: data
+    - name: publish-compass
+      runAfter: [verify-enterprise-contract]
+      when:
+      - input: $(tasks.select-component.results.selected)
+        operator: notin
+        values: [skip]
+      params:
+      - name: selected
+        value: $(tasks.select-component.results.selected)
+      workspaces:
+      - name: data
+        workspace: data
+      taskSpec:
+        params:
+        - name: selected
+          type: string
+        workspaces:
+        - name: data
+        results:
+        - name: COMPASS_PUBLICATION
+        - name: TEST_OUTPUT
+        volumes:
+        - name: trusted-ca
+          configMap:
+            name: trusted-ca
+        - name: registry
+          secret:
+            secretName: $(params.REGISTRY_SECRET)
+            items:
+            - key: .dockerconfigjson
+              path: config.json
+        steps:
+        - name: publish
+          image: $(params.PUBLISHER_IMAGE)
+          command: [python, -m, src.component]
+          args:
+          - publish-compass
+          - --snapshot
+          - $(params.selected)
+          - --plugin
+          - $(params.COMPONENT)
+          - --ec-report
+          - $(workspaces.data.path)/report-json.json
+          - --workdir
+          - $(workspaces.data.path)/compass-publication
+          - --compass-url
+          - $(params.COMPASS_URL)
+          - --fact-prefix
+          - ai5-marketplace:default/
+          - --results-dir
+          - /tekton/results
+          env:
+          - name: SSL_CERT_FILE
+            value: /var/plugin-ca/ca-bundle.crt
+          - name: REGISTRY_AUTH_FILE
+            value: /var/plugin-registry/config.json
+          - name: COMPASS_WRITE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: $(params.COMPASS_SECRET)
+                key: $(params.COMPASS_TOKEN_KEY)
+          volumeMounts:
+          - name: trusted-ca
+            mountPath: /var/plugin-ca
+            readOnly: true
+          - name: registry
+            mountPath: /var/plugin-registry
+            readOnly: true
+  workspaces:
+  - name: data
+    volumeClaimTemplate:
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi

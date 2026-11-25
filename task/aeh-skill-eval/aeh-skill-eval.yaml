@@ -5,7 +5,7 @@ metadata:
   annotations:
     tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: 3.1.0
+    app.kubernetes.io/version: 4.0.0
 spec:
   description: >-
     Evaluate changed skills sequentially through one abeval batch invocation.
@@ -46,7 +46,7 @@ spec:
     - name: persist
       type: string
       description: >-
-        Optional evaluation persistence: postgres,s3,compass. OCI evidence attachment
+        Optional evaluation persistence: postgres,s3. OCI evidence attachment
         is controlled by image-url and image-digest.
       default: ''
     - name: persistence-required
@@ -134,14 +134,6 @@ spec:
       type: string
       description: S3 publication bucket.
       default: ab-eval-reports
-    - name: compass-secret
-      type: string
-      description: Konflux Secret containing the Compass bearer token.
-      default: compass-facts-api
-    - name: compass-token-key
-      type: string
-      description: Key in compass-secret injected as ABEVAL_COMPASS_TOKEN.
-      default: token
     - name: ca-bundle-configmap
       type: string
       description: Optional Konflux ConfigMap with trusted CA bundle at ca-bundle.crt.
@@ -328,12 +320,6 @@ spec:
               name: $(params.s3-secret)
               key: insecure-skip-tls-verify
               optional: true
-        - name: ABEVAL_COMPASS_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: $(params.compass-secret)
-              key: $(params.compass-token-key)
-              optional: true
         - name: ABEVAL_COMMAND_TIMEOUT
           value: $(params.command-timeout)
         - name: ABEVAL_TIMEOUT_RETRIES
@@ -346,6 +332,10 @@ spec:
       args:
         - |
           set -euo pipefail
+          if [[ ",${ABEVAL_PERSIST//[[:space:]]/}," == *,compass,* ]]; then
+            echo "Compass facts are published after build verification. Select postgres or s3 for evaluation persistence." >&2
+            exit 2
+          fi
           if [ -s /var/trusted-ca/ca-bundle.crt ]; then
             export SSL_CERT_FILE=/var/trusted-ca/ca-bundle.crt
           fi
