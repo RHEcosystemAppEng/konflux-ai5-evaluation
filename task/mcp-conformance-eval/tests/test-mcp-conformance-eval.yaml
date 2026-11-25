@@ -169,7 +169,7 @@ spec:
         - name: job-timeout
           value: "120"
       workspaces:
-        - name: source
+        - name: reports
           workspace: tests-workspace
         - name: target-kubeconfig
           workspace: tests-workspace

@@ -287,6 +287,8 @@ spec:
           value: $(tasks.create-test-namespace.results.namespace-name)
         - name: component-image
           value: "registry.access.redhat.com/ubi9/ubi-minimal:latest"
+        - name: repo-subdir
+          value: "mcp-server-repo"
         - name: service-name
           value: "test-mcp-server"
         - name: image-pull-secret
