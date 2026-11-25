@@ -16,6 +16,16 @@ spec:
       type: string
       default: reports
       description: Workspace-relative directory containing phase summaries.
+    - name: facts-dir
+      type: string
+      default: facts
+      description: Workspace-relative directory containing generated Compass facts.
+    - name: scorecard-config
+      type: string
+      default: config/scorecard.yaml
+      description: >-
+        Scorecard path relative to the generate-compass-facts module. Use the
+        same value as the generate-compass-facts Task.
     - name: component-name
       type: string
       description: MCP component name from the Konflux Snapshot.
@@ -52,6 +62,10 @@ spec:
               optional: true
         - name: SUMMARY_DIR
           value: $(params.summary-dir)
+        - name: FACTS_DIR
+          value: $(params.facts-dir)
+        - name: SCORECARD_CONFIG
+          value: $(params.scorecard-config)
         - name: COMPONENT_NAME
           value: $(params.component-name)
         - name: GIT_URL
@@ -63,6 +77,23 @@ spec:
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
+
+        STARTED_AT=$(python3 - "$PIPELINE_RUN_ID" "$(context.taskRun.namespace)" <<'PY'
+        import sys
+        from kubernetes import client, config
+
+        config.load_incluster_config()
+        run = client.CustomObjectsApi().get_namespaced_custom_object(
+            group="tekton.dev",
+            version="v1",
+            namespace=sys.argv[2],
+            plural="pipelineruns",
+            name=sys.argv[1],
+            _request_timeout=30,
+        )
+        print(run["status"]["startTime"])
+        PY
+        )
 
         if [ -n "${DB_TLS_ROUTE_HOST:-}" ]; then
           python3 - "$DB_TLS_ROUTE_HOST" <<'PY' &
@@ -122,7 +153,10 @@ spec:
 
         python3 /opt/publish_to_db/scripts/store_mcp_results.py \
           --report-dir "$(workspaces.source.path)/$SUMMARY_DIR" \
+          --facts-dir "$(workspaces.source.path)/$FACTS_DIR" \
+          --scorecard-config "/opt/generate_compass_facts/$SCORECARD_CONFIG" \
           --component-name "$COMPONENT_NAME" \
           --git-url "$GIT_URL" \
           --commit-sha "$COMMIT_SHA" \
-          --pipeline-run-id "$PIPELINE_RUN_ID"
+          --pipeline-run-id "$PIPELINE_RUN_ID" \
+          --started-at "$STARTED_AT"

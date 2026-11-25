@@ -12,8 +12,12 @@ CREATE TABLE public.mcp_evaluations (
     run_id text NOT NULL UNIQUE,
     commit_sha text NOT NULL,
     status text NOT NULL,
+    entity_ref text,
+    started_at timestamptz NOT NULL,
     stored_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX mcp_evaluations_entity_ref_idx ON public.mcp_evaluations (entity_ref);
 
 CREATE TABLE public.mcp_phase_results (
     id uuid PRIMARY KEY,
@@ -34,6 +38,7 @@ CREATE TABLE public.mcp_check_results (
     source text,
     message text NOT NULL DEFAULT '',
     findings_count integer CHECK (findings_count >= 0),
+    fact_ref text,
     CONSTRAINT mcp_check_per_phase_key UNIQUE (phase_result_id, check_id),
     CONSTRAINT mcp_check_status_passed_ck CHECK (
         (status = 'pass' AND passed IS TRUE)
@@ -41,3 +46,27 @@ CREATE TABLE public.mcp_check_results (
         OR (status = 'not_evaluated' AND passed IS NULL AND score IS NULL)
     )
 );
+
+CREATE INDEX mcp_check_results_fact_ref_idx ON public.mcp_check_results (fact_ref);
+
+-- Latest evaluation per component by run start time, whatever its status.
+CREATE VIEW public.latest_mcp_evaluations AS
+SELECT id, component_id, run_id, commit_sha, status, entity_ref, stored_at, started_at
+FROM (
+    SELECT e.id, e.component_id, e.run_id, e.commit_sha, e.status,
+           e.entity_ref, e.stored_at, e.started_at,
+           row_number() OVER (
+               PARTITION BY e.component_id
+               ORDER BY e.started_at DESC, e.run_id DESC
+           ) AS latest_rank
+    FROM public.mcp_evaluations e
+) ranked
+WHERE latest_rank = 1;
+
+CREATE VIEW public.mcp_evaluation_history AS
+SELECT e.*,
+       row_number() OVER (
+           PARTITION BY e.component_id
+           ORDER BY e.started_at DESC, e.run_id DESC
+       ) = 1 AS is_latest
+FROM public.mcp_evaluations e;
