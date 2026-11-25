@@ -29,9 +29,10 @@ spec:
       default: quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1
     - name: source-subdir
       description: Subdirectory within the workspace where the MCP server
-        repository is cloned (relative to the workspace root). Use "." for the workspace root.
+        repository is cloned (relative to the workspace root). Use "." for
+        the workspace root.
       type: string
-      default: "."
+      default: .
   results:
     - name: report-path
       description: Path to the static evaluation summary JSON, relative to
@@ -41,7 +42,8 @@ spec:
       emptyDir: {}
   workspaces:
     - name: reports
-      description: Workspace for persistent report and result output (write reports here so they survive beyond this task's pod).
+      description: Workspace for persistent report and result output (write
+        reports here so they survive beyond this task's pod).
   steps:
     - name: use-trusted-artifact
       image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:d7e9f457d819b91d5f4b62effea105d54c6e54bedcc3afb2a7a9fcaaf752076b
@@ -65,8 +67,8 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        # Derive Python module name: strip -oci-ta suffix first so that
-        # mcp-static-eval-oci-ta → mcp_static_eval (matches /opt/mcp_static_eval/).
+        # Derive Python module name from task name, stripping any -oci-ta suffix
+        # (no-op here; makes the TA variant resolve the same package).
         TASK_NAME_NO_TA="${TASK_NAME%-oci-ta}"
         TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
 

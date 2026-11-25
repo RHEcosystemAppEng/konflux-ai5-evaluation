@@ -61,31 +61,10 @@ spec:
         - name: target-kubeconfig
           workspace: tests-workspace
 
-    # Verify that teardown-namespace actually refused (task status must be Failed)
-    - name: verify-safety-check
-      runAfter:
-        - test-safety-check
-      taskSpec:
-        steps:
-          - name: check-status
-            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
-            env:
-              - name: TASK_STATUS
-                value: $(tasks.test-safety-check.status)
-            script: |
-              #!/bin/bash
-              set -e
-              if [ "$TASK_STATUS" = "Failed" ]; then
-                echo "Safety check passed: teardown-namespace correctly refused to delete 'default'"
-              else
-                echo "FAIL: Expected teardown-namespace to fail on non-mcp-eval namespace, got status: $TASK_STATUS"
-                exit 1
-              fi
-
     # Test 2: Create a test namespace to delete
     - name: create-test-namespace
       runAfter:
-        - verify-safety-check
+        - test-safety-check
       taskSpec:
         results:
           - name: namespace-name
@@ -113,7 +92,7 @@ spec:
         - name: target-kubeconfig
           workspace: tests-workspace
 
-    # Verify namespace was deleted
+    # Test 4: Verify namespace was deleted
     - name: verify-deletion
       runAfter:
         - run-teardown-namespace
@@ -149,4 +128,32 @@ spec:
                 fi
               else
                 echo "Namespace successfully deleted"
+              fi
+
+  # Verify that test-safety-check actually refused (task status must be Failed).
+  # $(tasks.<name>.status) is a pipeline-level variable — it must be passed through
+  # a pipeline-level param into the taskSpec, not used directly inside taskSpec.env.
+  finally:
+    - name: verify-safety-check
+      params:
+        - name: task-status
+          value: $(tasks.test-safety-check.status)
+      taskSpec:
+        params:
+          - name: task-status
+            type: string
+        steps:
+          - name: check-status
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            env:
+              - name: TASK_STATUS
+                value: $(params.task-status)
+            script: |
+              #!/bin/bash
+              set -e
+              if [ "$TASK_STATUS" = "Failed" ]; then
+                echo "Safety check passed: teardown-namespace correctly refused to delete 'default'"
+              else
+                echo "FAIL: Expected teardown-namespace to fail on non-mcp-eval namespace, got status: $TASK_STATUS"
+                exit 1
               fi
