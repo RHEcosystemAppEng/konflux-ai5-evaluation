@@ -59,9 +59,10 @@ spec:
       type: string
     - name: repo-subdir
       description: Subdirectory within the source workspace where the MCP
-        server repository is cloned by the pipeline's fetch-mcp-repo task. Use "." for the workspace root.
+        server repository is cloned by the pipeline's fetch-mcp-repo task.
+        Use "." for the workspace root.
       type: string
-      default: "."
+      default: .
     - name: service-name
       description: Kubernetes Service name for the deployed MCP server
       type: string
