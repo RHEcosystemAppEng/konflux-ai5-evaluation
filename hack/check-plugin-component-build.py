@@ -48,7 +48,11 @@ assert label_lookup["source-url"] == "$(params.git-url)"
 assert label_lookup["mirror-source"] == "$(params.mirror-source)"
 
 evaluation = {item["name"]: item["value"] for item in tasks["evaluate-skill"]["params"]}
-assert evaluation["compass-token-key"] == "$(params.compass-token-key)"
+assert {"compass-secret", "compass-token-key"}.isdisjoint(evaluation)
+assert "compass-token-key" not in params
+assert params["persist"]["default"] == "postgres"
+collector = {item["name"]: item["value"] for item in tasks["collect-plugin-context"]["params"]}
+assert collector["compass-secret"] == "$(params.compass-secret)"
 assert evaluation["tiers"] == "$(tasks.select-evaluation-tiers.results.tiers)"
 assert [
     task["name"]

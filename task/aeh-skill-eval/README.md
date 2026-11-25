@@ -1,9 +1,10 @@
 # aeh-skill-eval
 
-Version 3.1.0 evaluates an explicit array of skills through one installed
+Version 4.0.0 evaluates an explicit array of skills through one installed
 `abeval batch` invocation. The CLI runs the existing single-skill workflow in
 sequence; configured plugin trees, MCP fixtures, tiers, policy, reporting, and
-PostgreSQL/S3/Compass persistence are unchanged. Separate pipeline runs may run
+PostgreSQL and S3 persistence are supported. Compass publication belongs in
+post-build integration after attestation verification. Separate pipeline runs may run
 concurrently. An empty list is a successful no-op.
 
 ## Steps
@@ -40,7 +41,7 @@ newer is required; pin it by digest in consuming pipelines.
 | `tiers` | `1` | Evaluation tiers passed directly to the CLI: 1, 2, or 1,2. |
 | `n-concurrent` | `1` | Maximum AEH trial cases run concurrently by the CLI. |
 | `aeh-image` | `quay.io/ecosystem-appeng/agent-eval-harness:v1.0.2-trial@sha256:374b28704de8562ae2d6130d84d8d33d99db7dfe9680315034b10db5308cc983` | Trial image pullable by the workload cluster; used for Tier 2. |
-| `persist` | `Disabled` | Optional evaluation persistence: postgres,s3,compass. OCI evidence attachment is controlled by image-url and image-digest. |
+| `persist` | `Disabled` | Optional PostgreSQL and S3 persistence. OCI evidence attachment is controlled by image-url and image-digest. |
 | `persistence-required` | `true` | Treat selected publication failures as errors. |
 | `image-url` | `Disabled` | Built component image repository for OCI report attachment. |
 | `image-digest` | `Disabled` | Built component image digest for OCI report attachment. |
@@ -61,8 +62,6 @@ newer is required; pin it by digest in consuming pipelines.
 | `database-secret` | `ab-eval-db-credentials` | Konflux Secret with database-url and optional database-tls-route-host. |
 | `s3-secret` | `minio-credentials` | Konflux Secret with endpoint-url, root-user, root-password, optional insecure-skip-tls-verify. |
 | `s3-bucket` | `ab-eval-reports` | S3 publication bucket. |
-| `compass-secret` | `compass-facts-api` | Konflux Secret containing the Compass bearer token. |
-| `compass-token-key` | `token` | Key injected as `ABEVAL_COMPASS_TOKEN`; use `COMPASS_STAGE_TOKEN` with the pilot's existing Secret. |
 | `ca-bundle-configmap` | `trusted-ca-bundle` | Optional Konflux ConfigMap with trusted CA bundle at ca-bundle.crt. |
 | `otel-exporter-endpoint` | `Disabled` | Optional OTLP/gRPC collector endpoint. |
 | `command-timeout` | `7200` | Timeout in seconds for each external AEH command. |
@@ -75,7 +74,7 @@ newer is required; pin it by digest in consuming pipelines.
 |---|---|
 | `TEST_OUTPUT` | Standard Konflux Tier 1 result. |
 | `IMAGES_PROCESSED` | Standard pullspec and digest coverage. |
-| `PLUGIN_EVALUATION` | Compact component identity and evidence digest; empty for legacy batches. |
+| `PLUGIN_EVALUATION` | Compact component identity, policy scores, and the digest of the full evaluator facts in the OCI report; empty for legacy batches. |
 | `TEST_OUTPUT_TIER_A` | Aggregate static result; unrequested tiers are excluded. |
 | `TEST_OUTPUT_TIER_B` | Aggregate informational trial result. |
 | `TEST_OUTPUT_PUBLICATION` | Aggregate application publication plus required OCI attachment. |
@@ -96,7 +95,7 @@ contracts. The optional CA bundle is mounted from `ca-bundle-configmap`.
 ## Usage
 
 This fragment uses the preparation, build, and tier selection results from the
-native per-plugin pipeline. [Reference pipeline](https://gitlab.cee.redhat.com/ai5-marketplace/plugin-pipeline/-/blob/per-plugin-componnent/konflux/pipelines/plugin-component-build.yaml)
+native per-plugin pipeline. [Reference pipeline](../../pipelines/plugin-component-build/plugin-component-build.yaml)
 
 ```yaml
 - name: evaluate-skill

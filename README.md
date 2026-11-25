@@ -27,11 +27,20 @@ PRs or MRs are merged when building from a mirror. Only that repository is
 queried for labels. GitHub.com and GitLab are supported in either direction.
 Mirrors must preserve the upstream merge commit SHA and target branch.
 
+## Compass publication
+
+The [Compass publication PipelineRun](pipelines/compass-publication/compass-publication.yaml)
+verifies the push Snapshot's build evidence and publishes the evaluator's facts.
+Its workspace passes the Conforma report to the publisher. The
+`pipeline-compass-publication` Component uses the same Tekton bundle builder
+as the build Pipeline. The IntegrationTestScenario resolves the PipelineRun
+from its digest-pinned bundle with `resourceKind: pipelinerun`.
+
 ## Supported Task catalog
 
 | Task | Version | Responsibility |
 |---|---|---|
-| [aeh-skill-eval](task/aeh-skill-eval/README.md) | 3.1.0 | Evaluate the package; emit schema-2 signed scores and attach complete reports |
+| [aeh-skill-eval](task/aeh-skill-eval/README.md) | 4.0.0 | Evaluate the package, emit schema-2 signed scores and attach complete reports |
 | [verify-plugin-evidence](task/verify-plugin-evidence/README.md) | 1.0.0 | Bind actual image, package inventory, report hashes and score evidence |
 | [collect-plugin-context](task/collect-plugin-context/README.md) | 1.0.0 | Collect ownership, lifecycle and requested Compass observations |
 | [check-pr-label](task/check-pr-label/README.md) | 0.3.0 | Select optional Tier 2 from the `evaluate` label on a GitHub PR or GitLab MR, including mirrored builds |
@@ -69,6 +78,7 @@ Tekton test Pipelines under each Task's `tests/` directory.
 hack/checkton-local.sh
 hack/missing-ta-tasks.sh
 python3 hack/check-plugin-component-build.py
+python3 hack/check-compass-publication.py
 ```
 
 Legacy Matrix aggregation, catalog-SHA discovery/registration Tasks and their
