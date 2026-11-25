@@ -32,6 +32,12 @@
 #   they consume actual MCP server source code from the pipeline's
 #   git-clone task. Both have proper `-oci-ta` variants generated from
 #   their recipe.yaml files.
+#
+# - task/mcp-static-eval-oci-ta/mcp-static-eval-oci-ta.yaml: the OCI-TA
+#   variant of mcp-static-eval still declares a `reports` workspace for
+#   writing evaluation output consumed by downstream tasks (e.g.
+#   generate-compass-facts). This workspace carries generated reports, not
+#   source-code build artifacts, so a second OCI-TA nesting is not needed.
 paths:
   - task/aeh-skill-eval/aeh-skill-eval.yaml
   - task/create-namespace/create-namespace.yaml
@@ -41,6 +47,7 @@ paths:
   - task/parse-snapshot/parse-snapshot.yaml
   - task/publish-to-compass/publish-to-compass.yaml
   - task/teardown-namespace/teardown-namespace.yaml
+  - task/mcp-static-eval-oci-ta/mcp-static-eval-oci-ta.yaml
   - task/wait-ready/wait-ready.yaml
 
 workspaces:
