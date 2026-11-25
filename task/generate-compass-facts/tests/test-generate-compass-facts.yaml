@@ -51,7 +51,7 @@ spec:
         - name: facts-dir
           value: "facts"
       workspaces:
-        - name: source
+        - name: reports
           workspace: tests-workspace
 
     - name: verify-facts
