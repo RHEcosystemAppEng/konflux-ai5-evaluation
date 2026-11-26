@@ -1,0 +1,236 @@
+# Tests for mcp-static-eval task. All checks always run and results are logged.
+# Summary is always created. Task does not fail based on check results.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: test-mcp-static-eval
+spec:
+  workspaces:
+    - name: tests-workspace
+      description: The workspace provided by the test runner script.
+  tasks:
+    - name: setup-clean-repo
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: create-minimal-repo
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            script: |
+              #!/bin/bash
+              set -e
+              microdnf install -y git --nodocs 2>/dev/null
+              mkdir -p "$(workspaces.source.path)/clean-repo"
+              cd "$(workspaces.source.path)/clean-repo"
+              git init
+              git config user.email "test@example.com"
+              git config user.name "Test User"
+              echo "# Test MCP Server" > README.md
+              cat > LICENSE <<'LICEOF'
+              MIT License
+
+              Copyright (c) 2026 Test
+
+              Permission is hereby granted, free of charge, to any person obtaining a copy
+              of this software and associated documentation files (the "Software"), to deal
+              in the Software without restriction, including without limitation the rights
+              to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+              copies of the Software, and to permit persons to whom the Software is
+              furnished to do so, subject to the following conditions:
+
+              The above copyright notice and this permission notice shall be included in all
+              copies or substantial portions of the Software.
+
+              THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+              IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+              FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+              AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+              LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+              OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+              SOFTWARE.
+              LICEOF
+              cat > server.py <<'PYEOF'
+              def handle(request):
+                  return {"result": request.get("method")}
+              PYEOF
+              git add README.md LICENSE server.py
+              git commit -m "Initial commit"
+              echo "Created clean test repo"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+
+    - name: setup-violations-repo
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: create-repo-with-violations
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            script: |
+              #!/bin/bash
+              set -e
+              microdnf install -y git --nodocs 2>/dev/null
+              mkdir -p "$(workspaces.source.path)/violations-repo"
+              cd "$(workspaces.source.path)/violations-repo"
+              git init
+              git config user.email "test@example.com"
+              git config user.name "Test User"
+
+              # Create a Python file with intentional violations
+              cat > server.py <<'EOF'
+              # MCP Server with test violations
+
+              # Violation 1: Hardcoded API key (gitleaks should detect)
+              API_KEY = "sk-1234567890abcdefghijklmnopqrstuvwxyz"
+
+              # Violation 2: User code execution (semgrep should detect)
+              def handle_request(user_input):
+                  result = eval(user_input)
+                  return result
+
+              print("MCP Server starting...")
+              EOF
+
+              echo "# Test Server" > README.md
+              git add server.py README.md
+              git commit -m "Add server with test violations"
+              echo "Created repo with intentional violations"
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+
+    - name: run-clean-repo
+      runAfter:
+        - setup-clean-repo
+      taskRef:
+        name: mcp-static-eval
+      params:
+        - name: source-subdir
+          value: "clean-repo"
+        - name: allowed-licenses
+          value: ""
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+        - name: reports
+          workspace: tests-workspace
+
+    - name: run-with-violations
+      runAfter:
+        - setup-violations-repo
+        - verify-clean-repo
+      taskRef:
+        name: mcp-static-eval
+      params:
+        - name: source-subdir
+          value: "violations-repo"
+        - name: allowed-licenses
+          value: ""
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+        - name: reports
+          workspace: tests-workspace
+
+    - name: verify-clean-repo
+      runAfter:
+        - run-clean-repo
+      params:
+        - name: REPORT_PATH
+          value: $(tasks.run-clean-repo.results.report-path)
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+      taskSpec:
+        params:
+          - name: REPORT_PATH
+        workspaces:
+          - name: source
+        steps:
+          - name: check-clean-repo-passed
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            script: |
+              #!/bin/bash
+              set -e
+              echo "=== Verifying clean repo results ==="
+
+              REPORT_PATH="$(params.REPORT_PATH)"
+
+              # Verify report exists
+              SUMMARY="$(workspaces.source.path)/$REPORT_PATH"
+              if [ ! -f "$SUMMARY" ]; then
+                echo "FAIL: Summary file not found at $SUMMARY"
+                exit 1
+              fi
+              echo "✓ Summary file created"
+
+              # Verify all checks passed
+              microdnf install -y python3 --nodocs 2>/dev/null
+              SUMMARY="$SUMMARY" python3 <<'PYEOF'
+              import json, os, sys
+              with open(os.environ["SUMMARY"]) as f:
+                  summary = json.load(f)
+              checks = summary.get("checks", [])
+              if not all(c.get("passed", False) for c in checks):
+                  print("FAIL: Expected all checks to pass for clean repo")
+                  print(json.dumps(summary, indent=2))
+                  sys.exit(1)
+              print(f"✓ All {len(checks)} checks passed")
+              PYEOF
+
+              echo "mcp-static-eval: clean repo test passed"
+
+    - name: verify-violations-repo
+      runAfter:
+        - run-with-violations
+      params:
+        - name: REPORT_PATH
+          value: $(tasks.run-with-violations.results.report-path)
+      workspaces:
+        - name: source
+          workspace: tests-workspace
+      taskSpec:
+        params:
+          - name: REPORT_PATH
+        workspaces:
+          - name: source
+        steps:
+          - name: check-violations-detected
+            image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+            script: |
+              #!/bin/bash
+              set -e
+              echo "=== Verifying violations repo results ==="
+
+              REPORT_PATH="$(params.REPORT_PATH)"
+
+              # Verify report exists
+              SUMMARY="$(workspaces.source.path)/$REPORT_PATH"
+              if [ ! -f "$SUMMARY" ]; then
+                echo "FAIL: Summary file not found at $SUMMARY"
+                exit 1
+              fi
+              echo "✓ Summary file created"
+
+              # Verify violations were detected
+              microdnf install -y python3 --nodocs 2>/dev/null
+              SUMMARY="$SUMMARY" python3 <<'PYEOF'
+              import json, os, sys
+              with open(os.environ["SUMMARY"]) as f:
+                  summary = json.load(f)
+
+              checks = summary.get("checks", [])
+              failed_checks = [c for c in checks if not c.get("passed", False)]
+
+              if len(failed_checks) == 0:
+                  print("FAIL: Expected some checks to fail for violations repo")
+                  print(json.dumps(summary, indent=2))
+                  sys.exit(1)
+
+              print(f"✓ {len(failed_checks)} check(s) detected violations as expected")
+              for check in failed_checks:
+                  print(f"  - {check.get('check')}: {check.get('findings', 0)} findings")
+              PYEOF
+
+              echo "mcp-static-eval: violations detection test passed"

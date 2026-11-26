@@ -1,61 +1,91 @@
-# check-pr-label
+# check-pr-label task
 
-Version 0.3.0 resolves evaluation tiers for GitHub.com and GitLab Component
-builds, including mirrors in either direction.
+Checks whether a specific pull request or merge request, or one associated with
+a commit, has a target label. Supports GitHub, GitHub Enterprise, and GitLab hosts.
+Returns a string result that can gate an optional evaluation task.
 
-| `tiers` | Behavior |
+For the skills evaluation gate, set `target-label: evaluate` and
+`pr-status-is: merged` so an open request cannot enable the evaluation.
+
+## Parameters
+
+| name | description | default value | required |
+|---|---|---|---|
+| git-url | HTTPS repository URL; its host selects the GitHub or GitLab API | | true |
+| git-revision | Commit SHA used to find associated pull or merge requests | | true |
+| pr-number | Repository-scoped GitHub PR number or GitLab MR IID | `""` | false |
+| target-label | Label to look for | | true |
+| pr-status-is | Request status: `open`, `merged`, `closed`, or empty for any status | `""` | false |
+| git-token-secret-name | Secret containing the Git access token | `git-secret` | false |
+| git-token-secret-key | Key containing the token in that Secret | `password` | false |
+
+## Results
+
+| name | description |
 |---|---|
-| `1` | Tier 1 with no API lookup |
-| `1,2` | Both tiers with no API lookup |
-| `auto` | Both tiers when a matching merge has `evaluate`. Otherwise Tier 1. |
+| has-label | `true` if the selected request matches the label and optional status; `false` if it does not. |
 
-Pass `current-sha` from the trusted clone result and `target-branch` from the
-configured Component branch. In `auto` mode, pass the build repository URL as
-`source-url`. The shared Pipeline supplies it from `git-url`. If
-`mirror-source` is set, the Task queries that repository exclusively.
-`label-name` defaults to `evaluate`.
+The task writes `has-label` only after checking a selected request. Missing
+credentials, API errors (including authentication failures and direct-lookup
+404s), malformed or unusable responses, and no associated requests fail the
+task without writing a result. Invalid status values and unsupported hosts
+also fail the task.
 
-| Build repository | `mirror-source` | Label lookup |
-|---|---|---|
-| GitHub.com | Empty | Build repository on GitHub |
-| GitLab | Empty | Build repository on GitLab |
-| GitLab mirror | Upstream GitHub.com repository URL | Upstream repository on GitHub |
-| GitHub mirror | Upstream GitLab repository URL | Upstream repository on GitLab |
+The task uses the existing Python image and installs no packages at runtime.
 
-The Task accepts HTTPS repository URLs and Git SSH clone URLs. Mirrors between
-repositories on the same provider also work. Configure the sync to preserve
-commit SHAs and use the same target branch on both sides.
+Request selection uses explicit `pr-number` first, then the optional
+`CONTEXT_PR_NUMBER` environment variable injected by the calling PipelineRun.
+When both are empty, commit lookup is used and all response pages are read.
+If exactly one associated request is found, it is selected. If multiple requests are found,
+the task warns and checks only the most recently created request, using
+`created_at` rather than API response order or update time. Invalid or missing
+creation dates fail selection when multiple requests are present.
 
-For GitLab lookups, set `gitlab-server-url` to the selected GitLab server. The
-server defaults to `https://gitlab.cee.redhat.com`. This setting also scopes
-where the Task sends the read-API token from `git-token-secret-name` and
-`git-token-secret-key`. Public GitHub.com repositories work anonymously.
-For authenticated GitHub lookups, pass a pull request read token via
-`github-token-secret-name` and `github-token-secret-key`, which default to
-`github-pr-read-token` and `token`.
+The optional status filter is applied after selecting the request. An older
+request cannot enable the gate when the newest request does not match.
+A direct lookup failure fails the task without falling back to SHA lookup.
+Direct pushes with no associated PR/MR are unsupported and fail the task.
 
-Callers that omit both repository URLs continue to use the previous
-`source-provider`, `gitlab-project-path`, and `github-repository` settings.
+## Workspaces
 
-The Task matches only merged changes for the exact build SHA and target branch.
-GitLab supports merge, squash and fast-forward commit identities, with a short
-retry while a push webhook can precede the MR state update. A GitHub PR must
-target the configured repository. A lookup with no matching change selects
-Tier 1. API and TLS errors, invalid responses, and ambiguous matches fail the
-Task. `ca-bundle-configmap` (default `trusted-ca`) optionally adds trust from
-`ca-bundle.crt`.
+None.
 
-Results are `tiers` (`1` or `1,2`) and `should-evaluate` (`true` when Tier 2 was
-selected). The pipeline passes the resolved tiers into the evaluator and records
-them in signed results. The label requests execution; managed qualification
-policy still decides which evidence and outcomes are required for release.
+## Secrets
 
-Apply the label before merging the final relevant MR or PR. The evaluation covers the
-entire affected plugin at that merged revision, including earlier merged changes.
-An unrelated plugin's path does not start this Component. For later evaluation
-without a new relevant merge, use an explicit `tiers=1,2` build for the selected
-Component and immutable revision. Rechecking ITS evidence alone does not run
-missing trials.
+| Secret (param) | Keys | Source | Purpose |
+|---|---|---|---|
+| `git-token-secret-name` | `git-token-secret-key` | Namespace running the Task | Required token to read pull or merge requests from the Git API. |
 
-The [Tekton integration test](tests/test-check-pr-label.yaml) checks explicit
-Tier 1 against an unreachable endpoint without requiring a token.
+The task sends the token through the GitHub `Authorization` header or GitLab
+`PRIVATE-TOKEN` header. Hostnames must contain `github` or `gitlab`, matching
+the source task's platform detection.
+
+## Usage
+
+Publish this new task bundle before use and pin its resolved digest in the
+consuming pipeline. The tag below illustrates the bundle location.
+
+```yaml
+- name: check-pr-label
+  taskRef:
+    resolver: bundles
+    params:
+    - name: name
+      value: check-pr-label
+    - name: bundle
+      value: quay.io/ecosystem-appeng/konflux-skill-evaluation/check-pr-label:0.1.0
+    - name: kind
+      value: task
+  params:
+  - name: git-url
+    value: $(tasks.parse-snapshot.results.git-url)
+  - name: git-revision
+    value: $(tasks.parse-snapshot.results.git-revision)
+  - name: target-label
+    value: evaluate
+  - name: pr-status-is
+    value: merged
+```
+
+Use `$(tasks.check-pr-label.results.has-label)` in a downstream task's `when`
+expression to run it only when the result is `true`.

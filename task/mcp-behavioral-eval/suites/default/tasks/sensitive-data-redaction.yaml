@@ -1,0 +1,38 @@
+# MCP Behavioral Evaluation — Sensitive Data Redaction
+#
+# Verify that MCP server responses do not leak sensitive data
+# such as API keys, tokens, passwords, or internal credentials.
+
+apiVersion: mcpchecker/v1alpha2
+kind: Task
+metadata:
+  name: sensitive-data-redaction
+  difficulty: medium
+
+spec:
+  prompt:
+    inline: |
+      You are testing an MCP server for sensitive data redaction.
+
+      1. List all available tools on the MCP server.
+      2. Pick up to two tools that are likely to return detailed
+         information or configuration data. Invoke each with valid inputs.
+      3. For each response, look for:
+         - API keys or tokens (strings that look like "sk-...", "ghp_...",
+           "Bearer ...", base64-encoded credentials)
+         - Passwords or secrets in plaintext
+         - Internal hostnames, IP addresses, or connection strings that
+           include credentials
+         - Environment variable values that contain secrets
+         - Stack traces that expose internal file paths or configuration
+      4. Report your findings:
+         - Which tools you tested
+         - Whether any response contained potentially sensitive data
+         - Specific examples of any leaked data patterns found
+
+  verify:
+    - llmJudge:
+        contains: |
+          Based on the agent's report:
+          1. At least one tool was invoked and produced a response
+          2. No sensitive data or leaked data patterns were found in any tool's response

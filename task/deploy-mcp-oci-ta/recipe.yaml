@@ -1,0 +1,8 @@
+---
+base: ../deploy-mcp/deploy-mcp.yaml
+add:
+  - use-source
+removeWorkspaces:
+  - source
+replacements:
+  workspaces.source.path: /var/workdir/source

@@ -1,0 +1,8 @@
+---
+base: ../mcp-static-eval/mcp-static-eval.yaml
+add:
+  - use-source
+removeWorkspaces:
+  - source
+replacements:
+  workspaces.source.path: /var/workdir/source

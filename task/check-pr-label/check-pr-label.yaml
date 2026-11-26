@@ -1,327 +1,160 @@
-# Version 0.1.0 bundles remain unchanged for legacy consumers.
+# to use this Task version and pin its published bundle digest. Pass git-url,
+# git-revision, target-label=evaluate, and pr-status-is=merged; use the has-label
+# result and retain the existing Git token Secret.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
   name: check-pr-label
-  annotations:
-    tekton.dev/tags: konflux
   labels:
-    app.kubernetes.io/version: 0.3.0
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/name: abevalflow
+    app.kubernetes.io/component: konflux
 spec:
-  description: Select explicit evaluation tiers or check the matching merged GitLab MR or GitHub PR for the
-    exact commit and target branch in the source repository or its configured mirror source.
+  description: >-
+    Checks whether a target PR label is present on a specific pull/merge request
+    or one associated with a given git commit. Supports both GitHub and GitLab.
+    Derives the API endpoint from the git-url host. Returns "true" if the
+    label and optional status match, "false" otherwise. Fails if no request
+    can be selected or the check cannot be completed.
   params:
-  - name: tiers
-    type: string
-    default: auto
-    description: auto uses the merged change's label; 1 and 1,2 explicitly select tiers without an API lookup.
-  - name: source-url
-    type: string
-    default: ""
-    description: Git repository URL of the build source, used for automatic label lookup.
-  - name: mirror-source
-    type: string
-    default: ""
-    description: Optional repository URL to use as the sole source of PR or MR labels.
-  - name: source-provider
-    type: string
-    default: gitlab
-    description: Legacy provider selection when source-url and mirror-source are both empty.
-  - name: target-branch
-    type: string
-    description: Exact destination branch of the merged MR or PR; required with auto.
-  - name: ca-bundle-configmap
-    type: string
-    default: trusted-ca
-    description: Optional additional CA trust bundle for API lookups.
-  - name: current-sha
-    type: string
-    description: Exact build commit SHA to match to a merged MR or PR.
-  - name: label-name
-    type: string
-    default: evaluate
-    description: Label that selects Tier 2 on a matching merged MR or PR.
-  - name: gitlab-server-url
-    type: string
-    default: https://gitlab.cee.redhat.com
-    description: Base URL of the GitLab server hosting the project.
-  - name: gitlab-project-path
-    type: string
-    default: ai5-marketplace%2Fagentic-plugins
-    description: Legacy GitLab project path when source-url and mirror-source are both empty.
-  - name: git-token-secret-name
-    type: string
-    default: agentic-plugins-gitlab-sa
-    description: Name of the Secret containing a GitLab access token with API read access to the project.
-  - name: git-token-secret-key
-    type: string
-    default: password
-    description: Key within git-token-secret-name holding the GitLab access token.
-  - name: github-repository
-    type: string
-    default: ""
-    description: Legacy GitHub.com owner/repo when source-url and mirror-source are both empty.
-  - name: github-token-secret-name
-    type: string
-    default: github-pr-read-token
-    description: Optional Secret containing a GitHub token with read access to pull requests.
-  - name: github-token-secret-key
-    type: string
-    default: token
-    description: Key within github-token-secret-name holding the GitHub token.
+    - name: git-url
+      type: string
+      description: Git repository URL (e.g. https://github.com/owner/repo)
+    - name: git-revision
+      type: string
+      default: ""
+      description: Git commit SHA to look up associated PRs/MRs for
+    - name: pr-number
+      type: string
+      default: ""
+      description: Optional repository-scoped PR number or GitLab MR IID; overrides CONTEXT_PR_NUMBER and commit lookup
+    - name: target-label
+      type: string
+      description: PR/MR label name to check for
+    - name: pr-status-is
+      type: string
+      default: ""
+      description: Optional PR/MR status (open, merged, closed); empty means any status
+    - name: git-token-secret-name
+      type: string
+      default: "git-secret"
+      description: Name of the Secret containing the Git access token
+    - name: git-token-secret-key
+      type: string
+      default: "password"
+      description: Key within the Git token Secret
   results:
-  - name: should-evaluate
-    description: true when Tier 2 was selected, false otherwise.
-  - name: tiers
-    description: 'Resolved tiers: 1 or 1,2.'
+    - name: has-label
+      description: "'true' if target-label appears on the PR/MR, 'false' otherwise"
   steps:
-  - name: check-label
-    image: registry.access.redhat.com/ubi9/python-311:latest@sha256:a0bdb55576fc5b8d6704279307817828ef027e1065533ceba133fe9516003a6c
-    env:
-    - name: TIERS
-      value: $(params.tiers)
-    - name: SOURCE_URL
-      value: $(params.source-url)
-    - name: MIRROR_SOURCE
-      value: $(params.mirror-source)
-    - name: SOURCE_PROVIDER
-      value: $(params.source-provider)
-    - name: TARGET_BRANCH
-      value: $(params.target-branch)
-    - name: CURRENT_SHA
-      value: $(params.current-sha)
-    - name: LABEL_NAME
-      value: $(params.label-name)
-    - name: GITLAB_SERVER_URL
-      value: $(params.gitlab-server-url)
-    - name: GITLAB_PROJECT_PATH
-      value: $(params.gitlab-project-path)
-    - name: GIT_TOKEN
-      valueFrom:
-        secretKeyRef:
-          name: $(params.git-token-secret-name)
-          key: $(params.git-token-secret-key)
-          optional: true
-    - name: GITHUB_UPSTREAM_REPOSITORY
-      value: $(params.github-repository)
-    - name: GITHUB_PR_TOKEN
-      valueFrom:
-        secretKeyRef:
-          name: $(params.github-token-secret-name)
-          key: $(params.github-token-secret-key)
-          optional: true
-    script: |
-      #!/usr/bin/env python3
-      import json
-      import os
-      import re
-      import ssl
-      import time
-      import urllib.error
-      import urllib.parse
-      import urllib.request
-      from pathlib import Path
+    - name: check
+      image: registry.access.redhat.com/ubi9/python-311:latest
+      env:
+        - name: GIT_URL
+          value: $(params.git-url)
+        - name: REVISION
+          value: $(params.git-revision)
+        - name: PR_NUMBER
+          value: $(params.pr-number)
+        - name: TARGET_LABEL
+          value: $(params.target-label)
+        - name: PR_STATUS
+          value: $(params.pr-status-is)
+        - name: GIT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: $(params.git-token-secret-name)
+              key: $(params.git-token-secret-key)
+              optional: true
+        - name: RESULT_PATH
+          value: $(results.has-label.path)
+      script: |
+        #!/usr/bin/env python3
+        from datetime import datetime
+        import json
+        import os
+        from pathlib import Path
+        import re
+        import ssl
+        import sys
+        import urllib.parse
+        import urllib.request
 
+        status = os.environ["PR_STATUS"]
+        if status not in ("", "open", "merged", "closed"):
+            sys.exit(f"ERROR: Invalid PR status: {status}")
 
-      def gitlab_server():
-          server = urllib.parse.urlsplit(os.environ["GITLAB_SERVER_URL"].rstrip("/"))
-          if (server.scheme != "https" or not server.hostname or server.username is not None
-                  or server.query or server.fragment):
-              raise SystemExit("GitLab must use HTTPS without embedded credentials or query parameters")
-          return server
+        token = os.environ.get("GIT_TOKEN", "")
+        label = os.environ["TARGET_LABEL"]
+        if not token:
+            sys.exit("ERROR: GIT_TOKEN is required to check PR/MR labels")
+        else:
+            repository = urllib.parse.urlsplit(os.environ["GIT_URL"])
+            host = (repository.hostname or "").lower()
+            path = repository.path.rstrip("/").lstrip("/").removesuffix(".git")
+            revision = os.environ["REVISION"]
+            pr_number = os.environ.get("PR_NUMBER", "") or os.environ.get("CONTEXT_PR_NUMBER", "")
+            if "github" in host:
+                platform = "github"
+                api = "https://api.github.com" if host == "github.com" else f"{repository.scheme}://{repository.netloc}/api/v3"
+                url = f"{api}/repos/{path}/commits/{revision}/pulls"
+                if pr_number:
+                    url = f"{api}/repos/{path}/pulls/{pr_number}"
+                headers = {"Accept": "application/vnd.github+json", "Authorization": f"token {token}"}
+            elif "gitlab" in host:
+                platform = "gitlab"
+                project = urllib.parse.quote(path, safe="")
+                url = f"{repository.scheme}://{repository.netloc}/api/v4/projects/{project}/repository/commits/{revision}/merge_requests"
+                if pr_number:
+                    url = f"{repository.scheme}://{repository.netloc}/api/v4/projects/{project}/merge_requests/{pr_number}"
+                headers = {"PRIVATE-TOKEN": token}
+            else:
+                sys.exit(f"ERROR: Unsupported Git platform: {host}")
 
+            try:
+                # Preserve the existing tasks' handling of internal Git certificates.
+                context = ssl._create_unverified_context()
+                requests = []
+                next_url = url
+                while next_url:
+                    request = urllib.request.Request(next_url, headers=headers)
+                    with urllib.request.urlopen(request, context=context, timeout=30) as response:
+                        page = json.loads(response.read())
+                        next_page = re.search(r'<([^>]+)>;\s*rel="next"', response.headers.get("Link", ""))
+                    if pr_number:
+                        requests = [page]
+                        break
+                    if not isinstance(page, list):
+                        raise ValueError("Expected a list of PR/MR objects from commit lookup")
+                    requests.extend(page)
+                    next_url = next_page.group(1) if next_page else None
+                    if next_url and urllib.parse.urlsplit(next_url)[:2] != urllib.parse.urlsplit(url)[:2]:
+                        raise ValueError("Unexpected pagination host or scheme")
+                if not requests:
+                    raise ValueError("No PRs/MRs found for the commit; this Task requires an associated PR/MR")
+                if len(requests) > 1:
+                    item = max(requests, key=lambda item: datetime.fromisoformat(item["created_at"]))
+                    number = item["number" if platform == "github" else "iid"]
+                    print(f"WARNING: Found {len(requests)} PRs/MRs without a PR number; checking only the latest PR/MR {number}", file=sys.stderr)
+                else:
+                    item = requests[0]
+                labels, state = item["labels"], item["state"]
+                valid_states = ("open", "closed") if platform == "github" else ("opened", "closed", "merged", "locked")
+                if not isinstance(labels, list) or state not in valid_states:
+                    raise ValueError("Invalid label or status data on the selected PR/MR")
+                if platform == "github":
+                    labels = [entry["name"] for entry in labels]
+                    if item["merged_at"] is not None:
+                        datetime.fromisoformat(item["merged_at"])
+                        state = "merged"
+                else:
+                    state = "open" if state == "opened" else state
+                if any(not isinstance(name, str) for name in labels):
+                    raise ValueError("Invalid label data on the selected PR/MR")
+                result = label in labels and (not status or state == status)
+            except Exception as error:
+                sys.exit(f"ERROR: PR/MR lookup failed: {error}")
 
-      def repository_from_url(value):
-          scp = re.fullmatch(r"git@([A-Za-z0-9.-]+):(.+)", value)
-          if scp:
-              value = f"ssh://git@{scp[1]}/{scp[2]}"
-          try:
-              url = urllib.parse.urlsplit(value)
-              port = url.port
-          except ValueError as error:
-              raise SystemExit("Invalid source repository URL") from error
-          if (url.scheme not in {"https", "ssh"} or not url.hostname or url.password is not None
-                  or (url.scheme == "https" and url.username is not None)
-                  or url.query or url.fragment or any(char.isspace() for char in value)):
-              raise SystemExit("Source repository must use an HTTPS or Git SSH URL without credentials or query parameters")
-
-          path = urllib.parse.unquote(url.path).strip("/").removesuffix(".git")
-          if url.hostname == "github.com" and (url.scheme == "ssh" or port in (None, 443)):
-              return "github", path
-
-          server = gitlab_server()
-          if (url.hostname != server.hostname
-                  or (url.scheme == "https" and (port or 443) != (server.port or 443))):
-              raise SystemExit("Source repository must be on GitHub.com or the configured gitlab-server-url")
-          prefix = urllib.parse.unquote(server.path).strip("/")
-          if prefix and url.scheme == "https":
-              if not path.startswith(prefix + "/"):
-                  raise SystemExit("Source repository must be under the configured gitlab-server-url")
-              path = path.removeprefix(prefix + "/")
-          parts = path.split("/")
-          if len(parts) < 2 or any(part in {"", ".", ".."} for part in parts):
-              raise SystemExit("GitLab source repository must include a namespace and project")
-          return "gitlab", path
-
-
-      def matching_github_pr(repository, sha, branch, context):
-          if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+", repository)
-                  or repository.endswith(("/.", "/.."))):
-              raise SystemExit("github-repository must be a GitHub.com owner/repo")
-
-          token = os.environ.get("GITHUB_PR_TOKEN", "")
-          matches = []
-          url = f"https://api.github.com/repos/{repository}/commits/{sha}/pulls"
-          for page in range(1, 11):
-              request = urllib.request.Request(
-                  f"{url}?per_page=100&page={page}",
-                  headers={"Accept": "application/vnd.github+json"},
-              )
-              if token:
-                  # Send the token only to the configured GitHub API endpoint.
-                  request.add_unredirected_header("Authorization", f"Bearer {token}")
-              try:
-                  with urllib.request.urlopen(request, context=context, timeout=30) as response:
-                      rows = json.load(response)
-                      links = response.headers.get("Link", "")
-              except urllib.error.HTTPError as error:
-                  with error:
-                      if page == 1 and error.code == 422:
-                          try:
-                              body = json.load(error)
-                          except (OSError, ValueError):
-                              body = None
-                          # A GitLab-only push can have no corresponding GitHub commit.
-                          if isinstance(body, dict) and body.get("message") == f"No commit found for SHA: {sha}":
-                              return None
-                  raise SystemExit(f"Cannot resolve evaluation label from GitHub: HTTP {error.code}") from error
-              except (urllib.error.URLError, OSError, ValueError) as error:
-                  raise SystemExit(f"Cannot resolve evaluation label from GitHub: {getattr(error, 'reason', error)}") from error
-
-              if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-                  raise SystemExit("Invalid GitHub PR response")
-              for row in rows:
-                  if row.get("state") != "closed" or not row.get("merged_at") or row.get("merge_commit_sha") != sha:
-                      continue
-                  base = row.get("base")
-                  base_repository = base.get("repo") if isinstance(base, dict) else None
-                  if not isinstance(base_repository, dict) or not isinstance(base_repository.get("full_name"), str):
-                      raise SystemExit("Invalid GitHub PR base repository")
-                  if not isinstance(base.get("ref"), str):
-                      raise SystemExit("Invalid GitHub PR base branch")
-                  if base["ref"] == branch and base_repository["full_name"].casefold() == repository.casefold():
-                      matches.append(row)
-              if not re.search(r'<[^>]+>;\s*rel="next"', links):
-                  break
-          else:
-              raise SystemExit("Too many associated GitHub PRs to resolve evaluation safely")
-
-          if len(matches) > 1:
-              raise SystemExit("Ambiguous merged GitHub PR for this exact commit and target branch")
-          return matches[0] if matches else None
-
-
-      def matching_gitlab_mr(repository, sha, branch, context):
-          token = os.environ.get("GIT_TOKEN", "")
-          if not token:
-              raise SystemExit("GitLab auto lookup requires a GitLab API token")
-          server = gitlab_server().geturl()
-          project = urllib.parse.quote(repository, safe="")
-          # The push webhook can precede GitLab updating the MR's merged state.
-          for attempt in range(3):
-              rows = []
-              page = "1"
-              for _ in range(10):
-                  query = urllib.parse.urlencode({"per_page": 100, "page": page})
-                  request = urllib.request.Request(
-                      f"{server}/api/v4/projects/{project}/repository/commits/{sha}/merge_requests?{query}",
-                      headers={"Accept": "application/json"},
-                  )
-                  request.add_unredirected_header("PRIVATE-TOKEN", token)
-                  try:
-                      with urllib.request.urlopen(request, context=context, timeout=30) as response:
-                          body = json.load(response)
-                          page = response.headers.get("X-Next-Page", "")
-                  except (urllib.error.URLError, OSError, ValueError) as error:
-                      raise SystemExit("Cannot resolve evaluation label; retry the build: " + str(getattr(error, "reason", error))) from error
-                  if not isinstance(body, list) or any(not isinstance(row, dict) for row in body):
-                      raise SystemExit("Invalid GitLab MR response")
-                  rows.extend(body)
-                  if not page:
-                      break
-                  if not page.isdigit():
-                      raise SystemExit("Invalid GitLab pagination")
-              else:
-                  raise SystemExit("Too many associated MRs to resolve evaluation safely")
-              matches = [row for row in rows if row.get("state") == "merged"
-                         and row.get("target_branch") == branch
-                         and (sha in (row.get("merge_commit_sha"), row.get("squash_commit_sha"))
-                              or (not row.get("merge_commit_sha") and not row.get("squash_commit_sha")
-                                  and (row.get("sha") or (row.get("diff_refs") or {}).get("head_sha")) == sha))]
-              if len(matches) > 1:
-                  raise SystemExit("Ambiguous merged GitLab MR for this exact commit and target branch")
-              if matches:
-                  return matches[0]
-              if attempt < 2:
-                  time.sleep(2)
-          return None
-
-
-      mode = os.environ["TIERS"]
-      if mode not in {"auto", "1", "1,2"}:
-          raise SystemExit("tiers must be auto, 1, or 1,2")
-
-      selected = mode
-      if mode == "auto":
-          sha = os.environ["CURRENT_SHA"]
-          branch = os.environ["TARGET_BRANCH"]
-          if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) or not branch:
-              raise SystemExit("auto requires a full commit SHA and target branch")
-          provider = os.environ["SOURCE_PROVIDER"]
-          github_repository = os.environ["GITHUB_UPSTREAM_REPOSITORY"]
-          gitlab_repository = urllib.parse.unquote(os.environ["GITLAB_PROJECT_PATH"])
-          lookup_url = os.environ["MIRROR_SOURCE"] or os.environ["SOURCE_URL"]
-          if lookup_url:
-              provider, repository = repository_from_url(lookup_url)
-              github_repository = repository if provider == "github" else ""
-              gitlab_repository = repository if provider == "gitlab" else ""
-          if provider not in {"gitlab", "github"}:
-              raise SystemExit("source-provider must be gitlab or github")
-          if provider == "github" and not github_repository:
-              raise SystemExit("GitHub auto lookup requires github-repository")
-
-          context = ssl.create_default_context()
-          ca = Path("/var/trusted-ca/ca-bundle.crt")
-          if ca.is_file() and ca.stat().st_size:
-              context.load_verify_locations(cafile=str(ca))
-
-          label = os.environ["LABEL_NAME"]
-          merge_request = matching_gitlab_mr(gitlab_repository, sha, branch, context) if provider == "gitlab" else None
-          if merge_request is not None or (provider == "gitlab" and not github_repository):
-              labeled = bool(merge_request and label in (merge_request.get("labels") or []))
-              source = "Merged GitLab MR: " + str(merge_request.get("iid") if merge_request else "none")
-          else:
-              pull = matching_github_pr(github_repository, sha, branch, context)
-              labels = pull.get("labels") if pull else []
-              if not isinstance(labels, list) or any(
-                  not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in labels
-              ):
-                  raise SystemExit("Invalid GitHub PR labels")
-              labeled = any(item["name"] == label for item in labels)
-              source = "Merged GitHub PR: " + str(pull.get("number") if pull else "none")
-          selected = "1,2" if labeled else "1"
-          print(source + "; selected tiers: " + selected)
-      else:
-          print("Explicit tiers: " + selected + "; label lookup skipped")
-
-      Path("$(results.tiers.path)").write_text(selected)
-      Path("$(results.should-evaluate.path)").write_text("true" if selected == "1,2" else "false")
-    volumeMounts:
-    - name: trusted-ca
-      mountPath: /var/trusted-ca
-      readOnly: true
-  volumes:
-  - name: trusted-ca
-    configMap:
-      name: $(params.ca-bundle-configmap)
-      optional: true
+        value = "true" if result else "false"
+        Path(os.environ["RESULT_PATH"]).write_text(value)
+        print(f"has-label: {value}")

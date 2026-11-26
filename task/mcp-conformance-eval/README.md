@@ -1,0 +1,71 @@
+# mcp-conformance-eval task
+
+Black-box deterministic conformance probe against a deployed MCP server.
+No LLM. Probes the server over Streamable HTTP for protocol, schema, and
+HTTP conformance using a three-state model (pass/fail/not_evaluated). Runs
+probes as a Kubernetes Job on the target cluster.
+
+## Parameters
+
+| name | description | default value | required |
+|---|---|---|---|
+| mcp-eval-image | MCP eval image with probe dependencies | `quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1` | false |
+| namespace-name | Ephemeral namespace where MCP server is deployed | | true |
+| service-name | K8s Service name of deployed MCP server | `mcp-server` | false |
+| service-port | Port MCP server listens on | `8080` | false |
+| timeout | Per-request HTTP timeout (seconds) | `30` | false |
+| job-timeout | Timeout for probe Job (seconds) | `300` | false |
+| openapi-url | Explicit OpenAPI contract URL | `""` | false |
+| mcp-path | URL path suffix for MCP Streamable HTTP endpoint | `/mcp` | false |
+| secrets-namespace | Namespace on target cluster where Compass secret is stored | `default` | false |
+| compass-secret | Secret name for Compass SoundCheck credentials | `mcp-eval-compass` | false |
+| job-template | Relative path to the Kubernetes Job template (from task directory) | `templates/mcp-conformance-eval-job.yaml` | false |
+| ca-secret | Secret name for CA certificate for internal Compass endpoints | `mcp-eval-ca` | false |
+| pipeline-run-id | Pipeline run ID for unique job naming; task run UID used if empty | `""` | false |
+
+## Results
+
+| name | description |
+|---|---|
+| report-path | Workspace-relative path to the conformance evaluation summary JSON (`reports/conformance-eval-summary.json`). |
+
+## Workspaces
+
+| name | description |
+|---|---|
+| reports | Persistent workspace for report and result output. |
+| target-kubeconfig | Kubeconfig for the target cluster where the MCP server is deployed. |
+
+## Secrets
+
+Secrets are read from the **target test cluster** (in the namespace
+specified by `secrets-namespace`, default `default`) and copied into the
+ephemeral evaluation namespace.
+
+| Secret (param) | Keys | Source | Purpose |
+|---|---|---|---|
+| `compass-secret` (default `mcp-eval-compass`) | `api-key`, `compass-url`, `entity-ref` | Target cluster (`secrets-namespace`) | Compass SoundCheck credentials for conformance probe use. |
+
+## Usage
+
+```yaml
+- name: mcp-conformance-eval
+  runAfter: [wait-ready]
+  taskRef:
+    resolver: bundles
+    params:
+    - name: name
+      value: mcp-conformance-eval
+    - name: bundle
+      value: "quay.io/ecosystem-appeng/konflux-skill-evaluation/mcp-conformance-eval:0.1.0@sha256:b9cb83c66f105eb0db6e7d6f21440502a1abdbc3bbe03687b5c3540959c20a45"
+    - name: kind
+      value: task
+  params:
+  - name: namespace-name
+    value: $(tasks.create-namespace.results.namespace-name)
+  workspaces:
+  - name: reports
+    workspace: shared-workspace
+  - name: target-kubeconfig
+    workspace: target-kubeconfig
+```

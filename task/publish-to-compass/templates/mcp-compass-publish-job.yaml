@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: ${JOB_TIMEOUT}
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: facts
+          configMap:
+            name: ${CONFIGMAP_NAME}
+        - name: internal-ca
+          secret:
+            secretName: ${CA_SECRET}
+            optional: true
+      containers:
+        - name: publisher
+          image: ${IMAGE}
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+
+              python3 -m ${TASK_MODULE}.scripts.compass_publisher \
+                --facts-dir /mnt/facts
+          workingDir: /tmp
+          env:
+            - name: HOME
+              value: /tmp
+            - name: DRY_RUN
+              value: "${DRY_RUN}"
+            - name: COMPASS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ${COMPASS_SECRET}
+                  key: api-key
+                  optional: false
+            - name: COMPASS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ${COMPASS_SECRET}
+                  key: compass-url
+                  optional: false
+          volumeMounts:
+            - name: facts
+              mountPath: /mnt/facts
+              readOnly: true
+            - name: internal-ca
+              mountPath: /tmp/ca
+              readOnly: true

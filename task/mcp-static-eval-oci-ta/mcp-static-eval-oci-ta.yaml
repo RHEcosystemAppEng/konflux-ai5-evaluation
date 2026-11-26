@@ -1,0 +1,125 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: mcp-static-eval-oci-ta
+  labels:
+    app.kubernetes.io/version: 0.1.0
+spec:
+  description: 'MCP static evaluation - build-time analysis (ADR Approach
+    4). Runs three language-agnostic static checks against the MCP server
+    source, before deployment and without running the server: secrets management
+    (gitleaks), no user-provided code execution (semgrep), and license compliance
+    (licensee). Always executes, independent of runtime outcomes; resolves
+    to pass/fail only. '
+  params:
+    - name: SOURCE_ARTIFACT
+      description: The Trusted Artifact URI pointing to the artifact with
+        the application source code.
+      type: string
+    - name: allowed-licenses
+      description: Space-separated approved SPDX ids overriding the built-in
+        allow-list (e.g. "apache-2.0 mit"). Empty uses DEFAULT_ALLOWED_LICENSES.
+      type: string
+      default: ""
+    - name: mcp-eval-image
+      description: MCP eval image with the scanners (gitleaks, semgrep, licensee)
+        and the pipeline code (scripts, abevalflow.mcp) baked in at PYTHONPATH=/opt.
+      type: string
+      default: quay.io/ecosystem-appeng/konflux-skill-evaluation/abevalflow-mcp-eval:0.1
+    - name: source-subdir
+      description: Subdirectory within the workspace where the MCP server
+        repository is cloned (relative to the workspace root). Use "." for
+        the workspace root.
+      type: string
+      default: .
+  results:
+    - name: report-path
+      description: Path to the static evaluation summary JSON, relative to
+        the reports workspace root.
+  volumes:
+    - name: workdir
+      emptyDir: {}
+  workspaces:
+    - name: reports
+      description: Workspace for persistent report and result output (write
+        reports here so they survive beyond this task's pod).
+  steps:
+    - name: use-trusted-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:d7e9f457d819b91d5f4b62effea105d54c6e54bedcc3afb2a7a9fcaaf752076b
+      args:
+        - use
+        - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+    - name: scan
+      image: $(params.mcp-eval-image)
+      imagePullPolicy: Always
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      env:
+        - name: TASK_NAME
+          value: $(context.task.name)
+        - name: SOURCE_SUBDIR
+          value: $(params.source-subdir)
+        - name: ALLOWED_LICENSES
+          value: $(params.allowed-licenses)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # Derive Python module name from task name, stripping any -oci-ta suffix
+        # (no-op here; makes the TA variant resolve the same package).
+        TASK_NAME_NO_TA="${TASK_NAME%-oci-ta}"
+        TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
+
+        SOURCE_DIR="/var/workdir/source/$SOURCE_SUBDIR"
+        RESULTS_DIR="$(workspaces.reports.path)/results"
+        mkdir -p "$RESULTS_DIR"
+
+        # licensee (Rugged/libgit2) refuses to open a repo whose directory is not
+        # owned by the current UID. The repo was cloned by the pipeline's
+        # fetch-mcp-repo task, which runs in a different pod/UID than this step,
+        # so that ownership check always trips here even though we only need
+        # read access. Mark the workspace as a trusted ("safe") directory the
+        # same way `git config --global --add safe.directory` would - written
+        # directly since this image has no git CLI, only libgit2 bindings.
+        export HOME="${HOME:-/tmp}"
+        mkdir -p "$HOME"
+        printf '[safe]\n\tdirectory = *\n' >>"$HOME/.gitconfig"
+
+        LICENSE_ARGS=""
+        # shellcheck disable=SC2086
+        for spdx in $ALLOWED_LICENSES; do
+          LICENSE_ARGS="$LICENSE_ARGS --allow $spdx"
+        done
+
+        echo "=== Static evaluation scanners on $SOURCE_DIR ==="
+        python -m "${TASK_MODULE}.scripts.scanners.static_eval_secrets_scan" "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
+        python -m "${TASK_MODULE}.scripts.scanners.static_eval_no_user_code_scan" "$SOURCE_DIR" --reports-dir "$RESULTS_DIR"
+        # shellcheck disable=SC2086
+        python -m "${TASK_MODULE}.scripts.scanners.static_eval_license_scan" "$SOURCE_DIR" --reports-dir "$RESULTS_DIR" $LICENSE_ARGS
+    - name: gate
+      image: $(params.mcp-eval-image)
+      imagePullPolicy: Always
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      env:
+        - name: TASK_NAME
+          value: $(context.task.name)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        TASK_NAME_NO_TA="${TASK_NAME%-oci-ta}"
+        TASK_MODULE="${TASK_NAME_NO_TA//-/_}"
+
+        RESULTS_DIR="$(workspaces.reports.path)/results"
+        REPORTS_DIR="$(workspaces.reports.path)/reports"
+        mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
+
+        python -m "${TASK_MODULE}.scripts.runners.static_eval_gate" \
+          --results-dir "$RESULTS_DIR" \
+          --reports-dir "$REPORTS_DIR"
+
+        printf '%s' "reports/static-eval-summary.json" >"$(results.report-path.path)"
