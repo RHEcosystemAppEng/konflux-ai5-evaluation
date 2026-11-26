@@ -46,6 +46,7 @@ paths:
   - task/mcp-conformance-eval/mcp-conformance-eval.yaml
   - task/parse-snapshot/parse-snapshot.yaml
   - task/publish-to-compass/publish-to-compass.yaml
+  - task/publish-to-db/publish-to-db.yaml
   - task/teardown-namespace/teardown-namespace.yaml
   - task/mcp-static-eval-oci-ta/mcp-static-eval-oci-ta.yaml
   - task/wait-ready/wait-ready.yaml
