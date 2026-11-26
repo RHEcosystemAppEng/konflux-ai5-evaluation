@@ -14,3 +14,4 @@
 - Target-cluster Secret copying, temporary ConfigMap mounting, and publisher
   Job lifecycle management.
 - Task-owned Compass fact schema and validation module.
+- Label the applied Job pod template with abevalflow/role=publisher so namespace policies grant declared Compass access only.

@@ -226,7 +226,9 @@ spec:
         fi
 
         # Apply the Job
-        oc apply -f "$(workspaces.reports.path)/conformance-eval-job.yaml" --namespace="$NAMESPACE"
+        oc patch --local -f "$(workspaces.reports.path)/conformance-eval-job.yaml" \
+          --type=merge -p '{"spec":{"template":{"metadata":{"labels":{"abevalflow/role":"conformance"}}}}}' -o yaml \
+          | oc apply --namespace="$NAMESPACE" -f -
 
         RESULTS_DIR="$(workspaces.reports.path)/results"
         mkdir -p "$RESULTS_DIR"

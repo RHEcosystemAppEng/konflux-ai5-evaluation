@@ -7,6 +7,11 @@ be pre-cloned into the workspace at the `repo-subdir` location (default
 image pull and credential Secrets from the pipeline namespace to the
 ephemeral namespace before deployment.
 
+Charts must not define NetworkPolicies, RoleBindings, ClusterRoleBindings, or
+the reserved `abevalflow/role` label. The Task checks rendered manifests before
+installation. Hooks and CRD installation are disabled to prevent bypassing
+that check; charts requiring those features need adjustment.
+
 ## Parameters
 
 | name | description | default value | required |

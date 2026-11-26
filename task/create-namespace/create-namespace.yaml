@@ -11,9 +11,10 @@ spec:
     RoleBinding that references the ClusterRole mcp-eval-ephemeral-access.
     That ClusterRole must already exist on the target cluster; it is the
     responsibility of the target cluster maintainers to configure it.
-    Namespace security restrictions are currently disabled. The namespace
-    is named mcp-eval-<run-id> and is intended to be cleaned up by the
-    teardown-namespace task in the finally block.
+    Denies ingress and egress by default, then allows DNS,
+    declared backend destinations, and explicitly scoped evaluation traffic.
+    The namespace is named mcp-eval-<run-id> and is intended to be
+    cleaned up by the teardown-namespace task in the finally block.
   params:
     - name: pipeline-run-id
       type: string
@@ -23,8 +24,33 @@ spec:
       type: string
       default: ""
       description: >-
-        Retained for pipeline compatibility. NetworkPolicy restrictions are
-        currently disabled and this parameter is not used.
+        Comma-separated IP:port destinations for sandbox backends (TCP).
+        IPv6 addresses must be bracketed. Hostnames are not supported by
+        Kubernetes NetworkPolicy. Empty means no backend egress.
+    - name: llm-endpoints
+      type: string
+      default: ""
+      description: Comma-separated IP:port LLM destinations, for behavioral Jobs only.
+    - name: compass-endpoints
+      type: string
+      default: ""
+      description: Comma-separated IP:port Compass destinations, for conformance and publisher Jobs only.
+    - name: openapi-endpoints
+      type: string
+      default: ""
+      description: Comma-separated IP:port external OpenAPI destinations, for conformance Jobs only.
+    - name: service-port
+      type: string
+      default: "8080"
+      description: MCP pod port allowed from same-namespace conformance and behavioral Jobs.
+    - name: dns-namespace
+      type: string
+      default: "openshift-dns"
+      description: Namespace of the cluster DNS resolver (kube-system on the Kind test cluster).
+    - name: dns-port
+      type: string
+      default: "5353"
+      description: DNS endpoint port for UDP and TCP (53 on the Kind test cluster).
     - name: pipeline-sa-name
       type: string
       default: "mcp-eval-pipeline"
@@ -55,6 +81,20 @@ spec:
           value: $(params.pipeline-run-id)
         - name: TASK_RUN_UID
           value: $(context.taskRun.uid)
+        - name: BACKEND_ENDPOINTS
+          value: $(params.backend-endpoints)
+        - name: LLM_ENDPOINTS
+          value: $(params.llm-endpoints)
+        - name: COMPASS_ENDPOINTS
+          value: $(params.compass-endpoints)
+        - name: OPENAPI_ENDPOINTS
+          value: $(params.openapi-endpoints)
+        - name: SERVICE_PORT
+          value: $(params.service-port)
+        - name: DNS_NAMESPACE
+          value: $(params.dns-namespace)
+        - name: DNS_PORT
+          value: $(params.dns-port)
         - name: PIPELINE_SA_NAME
           value: $(params.pipeline-sa-name)
         - name: PIPELINE_SA_NAMESPACE
@@ -65,10 +105,67 @@ spec:
         echo "=== CREATE EPHEMERAL NAMESPACE ==="
 
         _ID="${PIPELINE_RUN_ID:-$TASK_RUN_UID}"
-        RUN_ID=$(printf '%s' "$_ID" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-40)
+        RUN_ID=$(printf '%s' "$_ID" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | cut -c1-40 | sed 's/^-*//;s/-*$//')
+        if [ -z "$RUN_ID" ]; then
+          echo "ERROR: Run ID yields empty namespace suffix" >&2
+          exit 1
+        fi
         NAMESPACE="mcp-eval-${RUN_ID}"
-        LABEL_RUN_ID=$(printf '%s' "$_ID" | sed 's/[^a-zA-Z0-9._-]/_/g' | cut -c1-63)
+        LABEL_RUN_ID=$(printf '%s' "$_ID" | sed 's/[^a-zA-Z0-9._-]/_/g' | cut -c1-63 | sed 's/^[^a-zA-Z0-9]*//;s/[^a-zA-Z0-9]*$//')
         echo "Namespace: $NAMESPACE"
+
+        for PORT in "$SERVICE_PORT" "$DNS_PORT"; do
+          if [[ ! "$PORT" =~ ^[0-9]{1,5}$ ]] || ((10#$PORT < 1 || 10#$PORT > 65535)); then
+            echo "ERROR: Invalid service or DNS port" >&2
+            exit 1
+          fi
+        done
+        SERVICE_PORT=$((10#$SERVICE_PORT))
+        DNS_PORT=$((10#$DNS_PORT))
+        if [[ ! "$DNS_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || ((${#DNS_NAMESPACE} > 63)); then
+          echo "ERROR: Invalid DNS namespace" >&2
+          exit 1
+        fi
+
+        declare -A EGRESS_RULES
+        for GROUP in BACKEND LLM COMPASS OPENAPI; do
+          PARAMETER="${GROUP}_ENDPOINTS"
+          DESTINATIONS="${!PARAMETER}"
+          EGRESS_RULES[$GROUP]=""
+          [ -n "$DESTINATIONS" ] || continue
+          if [[ "$DESTINATIONS" == ,* || "$DESTINATIONS" == *, || "$DESTINATIONS" == *,,* || "$DESTINATIONS" == *$'\n'* ]]; then
+            echo "ERROR: Empty entry or newline in $PARAMETER" >&2
+            exit 1
+          fi
+          IFS=',' read -r -a ENDPOINTS <<< "$DESTINATIONS"
+          for ENDPOINT in "${ENDPOINTS[@]}"; do
+            ENDPOINT=$(printf '%s' "$ENDPOINT" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            if [[ "$ENDPOINT" =~ ^(([0-9]{1,3}\.){3}[0-9]{1,3}):([0-9]{1,5})$ ]]; then
+              ADDRESS="${BASH_REMATCH[1]}"
+              PORT="${BASH_REMATCH[3]}"
+              IFS='.' read -r -a OCTETS <<< "$ADDRESS"
+              for OCTET in "${OCTETS[@]}"; do
+                if ((10#$OCTET > 255)) || [[ "$OCTET" =~ ^0[0-9]+$ ]]; then
+                  echo "ERROR: Invalid IPv4 address in $PARAMETER" >&2
+                  exit 1
+                fi
+              done
+              CIDR="$ADDRESS/32"
+            elif [[ "$ENDPOINT" =~ ^\[([0-9a-fA-F:]+)\]:([0-9]{1,5})$ ]]; then
+              CIDR="${BASH_REMATCH[1]}/128"
+              PORT="${BASH_REMATCH[2]}"
+            else
+              echo "ERROR: $PARAMETER requires IP:port or [IPv6]:port; hostnames and URLs cannot be enforced by NetworkPolicy" >&2
+              exit 1
+            fi
+            if ((10#$PORT < 1 || 10#$PORT > 65535)); then
+              echo "ERROR: Invalid port in $PARAMETER" >&2
+              exit 1
+            fi
+            printf -v RULE '    - to:\n        - ipBlock:\n            cidr: %s\n      ports:\n        - protocol: TCP\n          port: %d\n' "$CIDR" "$((10#$PORT))"
+            EGRESS_RULES[$GROUP]+="$RULE"
+          done
+        done
 
         cat <<EOF | oc apply -f -
         apiVersion: v1
@@ -101,6 +198,103 @@ spec:
             namespace: $PIPELINE_SA_NAMESPACE
         EOF
         echo "Granted ephemeral access in namespace"
+
+        cat <<EOF | oc apply -n "$NAMESPACE" -f -
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: mcp-eval-default-deny
+        spec:
+          podSelector: {}
+          policyTypes: [Ingress, Egress]
+          ingress: []
+          egress: []
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: mcp-eval-dns
+        spec:
+          podSelector: {}
+          policyTypes: [Egress]
+          egress:
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: $DNS_NAMESPACE
+              ports:
+                - protocol: UDP
+                  port: $DNS_PORT
+                - protocol: TCP
+                  port: $DNS_PORT
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: mcp-eval-mcp-ingress
+        spec:
+          podSelector:
+            matchExpressions:
+              - key: abevalflow/role
+                operator: DoesNotExist
+          policyTypes: [Ingress]
+          ingress:
+            - from:
+                - podSelector:
+                    matchExpressions:
+                      - key: abevalflow/role
+                        operator: In
+                        values: [conformance, behavioral]
+              ports:
+                - protocol: TCP
+                  port: $SERVICE_PORT
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: mcp-eval-evaluator-to-mcp
+        spec:
+          podSelector:
+            matchExpressions:
+              - key: abevalflow/role
+                operator: In
+                values: [conformance, behavioral]
+          policyTypes: [Egress]
+          egress:
+            - to:
+                - podSelector:
+                    matchExpressions:
+                      - key: abevalflow/role
+                        operator: DoesNotExist
+              ports:
+                - protocol: TCP
+                  port: $SERVICE_PORT
+        EOF
+
+        for GROUP in BACKEND LLM COMPASS OPENAPI; do
+          case "$GROUP" in
+            BACKEND) SELECTOR='operator: DoesNotExist' ;;
+            LLM) SELECTOR='operator: In, values: [behavioral]' ;;
+            COMPASS) SELECTOR='operator: In, values: [conformance, publisher]' ;;
+            OPENAPI) SELECTOR='operator: In, values: [conformance]' ;;
+          esac
+          RULES="egress: []"
+          if [ -n "${EGRESS_RULES[$GROUP]}" ]; then
+            RULES=$(printf 'egress:\n%s' "${EGRESS_RULES[$GROUP]}")
+          fi
+          cat <<EOF | oc apply -n "$NAMESPACE" -f -
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: mcp-eval-${GROUP,,}-egress
+        spec:
+          podSelector:
+            matchExpressions:
+              - {key: abevalflow/role, $SELECTOR}
+          policyTypes: [Egress]
+          $RULES
+        EOF
+        done
         echo ""
         echo "=== Namespace $NAMESPACE ready ==="
 

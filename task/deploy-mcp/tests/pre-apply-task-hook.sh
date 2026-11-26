@@ -64,6 +64,9 @@ rules:
       - nonexistent-pull-secret
     resources: ["secrets"]
     verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
