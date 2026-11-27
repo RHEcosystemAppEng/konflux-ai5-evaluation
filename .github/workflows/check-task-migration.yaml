@@ -25,7 +25,7 @@ jobs:
         uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: kind
-      - uses: tektoncd/actions/setup-tektoncd@cd4768a594ec4a7af8ef72d73524a584cb564e34 # main
+      - uses: tektoncd/actions/setup-tektoncd@aed363334a4b49326bd9d6bea95e7a9265bb3294 # main
         with:
           pipeline_version: v1.16.0
       - name: Run check
